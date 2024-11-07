@@ -1,27 +1,31 @@
 package main
 
 import (
-    "math/rand"
-    "os"
-    "strconv"
+	"encoding/json"
+	"fmt"
+	"os"
 )
 
+type Payload struct {
+	Params map[string]string `json:"params"`
+	Seed   int64             `json:"seed"`
+}
+
 func main() {
-    args := os.Args
+	// Read JSON from stdin
+	decoder := json.NewDecoder(os.Stdin)
+	var payload Payload
+	if err := decoder.Decode(&payload); err != nil {
+		fmt.Println("Error decoding JSON:", err)
+		return
+	}
 
-    // Use the first argument as the seed for random generation
-    if len(args) > 0 {
-        seed, err := strconv.ParseInt(args[0], 10, 64)
-        if err == nil {
-            rand.Seed(seed)
-        }
-    }
+	// Use the "name" parameter if provided
+	name := payload.Params["name"]
+	if name == "" {
+		name = "World"
+	}
 
-    // Use the second argument as the name, if provided
-    if len(args) > 1 {
-        name := args[1]
-        println("Hello, " + name + "!")
-    } else {
-        println("Hello, World!")
-    }
+	// Print a greeting
+	fmt.Printf("Hello, %s! (seed: %d)\n", name, payload.Seed)
 }

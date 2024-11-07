@@ -1,12 +1,11 @@
 {
   "port": "8080",
   "cache_ttl": 300,
-  "cache_size": 100,
+  "cache_size": 50,
   "routes": {
     "/hello_world": {
       "wasm_file": "instruments/hello_world.wasm",
-      "cache": true,
-      "ttl": 600
+      "cache": false
     },
     "/random": {
       "wasm_file": "instruments/random_number.wasm",
@@ -15,7 +14,16 @@
     "/fibonacci": {
       "wasm_file": "instruments/fibonacci.wasm",
       "cache": true,
-      "ttl": 120
+      "ttl": 600
+    },
+    "/process_file": {
+      "wasm_file": "instruments/file_processor.wasm",
+      "cache": false,
+      "ttl": 120,
+      "filesystem": {
+        "mount": "/data",
+        "path": "./data"
+      }
     }
   }
 }
