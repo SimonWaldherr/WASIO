@@ -1,0 +1,21 @@
+{
+  "port": "8080",
+  "cache_ttl": 300,
+  "cache_size": 100,
+  "routes": {
+    "/hello_world": {
+      "wasm_file": "instruments/hello_world.wasm",
+      "cache": true,
+      "ttl": 600
+    },
+    "/random": {
+      "wasm_file": "instruments/random_number.wasm",
+      "cache": false
+    },
+    "/fibonacci": {
+      "wasm_file": "instruments/fibonacci.wasm",
+      "cache": true,
+      "ttl": 120
+    }
+  }
+}
