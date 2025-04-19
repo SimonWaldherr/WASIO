@@ -1,10 +1,14 @@
 {
   "port": "8080",
   "cache_ttl": 300,
-  "cache_size": 50,
+  "cache_size": 1024,
   "routes": {
     "/hello_world": {
       "wasm_file": "instruments/hello_world.wasm",
+      "cache": false
+    },
+    "/llama-chat": {
+      "wasm_file": "instruments/llama-chat.wasm",
       "cache": false
     },
     "/random": {
@@ -23,6 +27,23 @@
       "filesystem": {
         "mount": "/data",
         "path": "./data"
+      }
+    },
+    "/profile": {
+      "wasm_file": "instruments/profile.wasm",
+      "cache":     false,
+      "filesystem": {
+        "mount": "/templates",
+        "path":  "./templates"
+      }
+    },
+    "/wiki": {
+      "wasm_file": "instruments/wiki.wasm",
+      "cache":     false,
+      "ttl":       60,
+      "filesystem": {
+        "mount": "/wiki",
+        "path":  "./wiki"
       }
     }
   }
