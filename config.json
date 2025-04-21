@@ -45,6 +45,12 @@
         "mount": "/wiki",
         "path":  "./wiki"
       }
+    },
+    "/mandelbrot": {
+      "wasm_file": "instruments/mandelbrot.wasm",
+      "cache":     false,
+      "ttl":       0,
+      "filesystem": {}
     }
   }
 }
