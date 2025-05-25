@@ -46,6 +46,14 @@
         "path":  "./wiki"
       }
     },
+      "/chat": {
+        "wasm_file": "instruments/chat.wasm",
+        "cache": false,
+        "filesystem": {
+          "mount": "/chat",
+          "path": "./chat"
+        }
+    },
     "/mandelbrot": {
       "wasm_file": "instruments/mandelbrot.wasm",
       "cache":     false,

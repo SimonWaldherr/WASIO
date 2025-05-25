@@ -51,8 +51,8 @@ func main() {
 			for ; iter < maxIter && zx2+zy2 <= 4; iter++ {
 				zy = 2*zx*zy + y
 				zx = zx2 - zy2 + x
-				zx2 = zx*zx
-				zy2 = zy*zy
+				zx2 = zx * zx
+				zy2 = zy * zy
 			}
 			col := mapColor(iter, maxIter)
 			img.Set(px, py, col)
