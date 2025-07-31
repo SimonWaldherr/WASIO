@@ -2,28 +2,83 @@
   "port": "8080",
   "cache_ttl": 300,
   "cache_size": 1024,
+  "index_page": true,
+  "monitoring": true,
   "routes": {
     "/hello_world": {
       "wasm_file": "instruments/hello_world.wasm",
-      "cache": false
-    },
-    "/llama-chat": {
-      "wasm_file": "instruments/llama-chat.wasm",
-      "cache": false
+      "cache": false,
+      "description": "Simple greeting service demonstrating basic WASM interaction and parameter passing",
+      "category": "Basic",
+      "example": "?name=Alice"
     },
     "/random": {
       "wasm_file": "instruments/random_number.wasm",
-      "cache": false
+      "cache": false,
+      "description": "Generates random numbers using a seed-based approach for reproducible randomness",
+      "category": "Basic",
+      "example": ""
     },
     "/fibonacci": {
       "wasm_file": "instruments/fibonacci.wasm",
       "cache": true,
-      "ttl": 600
+      "ttl": 600,
+      "description": "Computes Fibonacci numbers with response caching for performance optimization",
+      "category": "Math",
+      "example": "?n=15"
+    },
+    "/calculator": {
+      "wasm_file": "instruments/calculator.wasm",
+      "cache": true,
+      "ttl": 300,
+      "description": "Mathematical calculator supporting addition, subtraction, multiplication, division, power, and modulo operations",
+      "category": "Math",
+      "example": "?op=add&a=15&b=25"
+    },
+    "/time_utils": {
+      "wasm_file": "instruments/time_utils.wasm",
+      "cache": false,
+      "description": "Advanced time and date manipulation with timezone support, formatting, and calculations",
+      "category": "Utils",
+      "example": "?op=add&duration=2h30m&tz=UTC"
+    },
+    "/text_utils": {
+      "wasm_file": "instruments/text_utils.wasm",
+      "cache": false,
+      "description": "Comprehensive text processing including case conversion, analysis, pattern matching, and statistics",
+      "category": "Utils",
+      "example": "?op=palindrome&text=racecar"
+    },
+    "/url_utils": {
+      "wasm_file": "instruments/url_utils.wasm",
+      "cache": false,
+      "description": "URL encoding, decoding, parsing, validation, and component extraction utilities",
+      "category": "Utils",
+      "example": "?op=parse&input=https://example.com/path?key=value"
+    },
+    "/hash_utils": {
+      "wasm_file": "instruments/hash_utils.wasm",
+      "cache": true,
+      "ttl": 3600,
+      "description": "Cryptographic hashing (MD5, SHA family) and encoding utilities (Base64, Hex)",
+      "category": "Security",
+      "example": "?op=sha256&input=hello"
+    },
+    "/mandelbrot": {
+      "wasm_file": "instruments/mandelbrot.wasm",
+      "cache": false,
+      "ttl": 0,
+      "description": "Real-time Mandelbrot fractal generator with customizable parameters and PNG output",
+      "category": "Graphics",
+      "example": "?cx=-0.5&cy=0&zoom=1&width=400&height=300"
     },
     "/process_file": {
       "wasm_file": "instruments/file_processor.wasm",
       "cache": false,
       "ttl": 120,
+      "description": "File analysis and processing with controlled filesystem access patterns",
+      "category": "File I/O",
+      "example": "",
       "filesystem": {
         "mount": "/data",
         "path": "./data"
@@ -31,34 +86,37 @@
     },
     "/profile": {
       "wasm_file": "instruments/profile.wasm",
-      "cache":     false,
+      "cache": false,
+      "description": "Dynamic HTML profile generation using template rendering and parameter substitution",
+      "category": "Web",
+      "example": "?name=John&age=25&hobbies=reading,coding,hiking",
       "filesystem": {
         "mount": "/templates",
-        "path":  "./templates"
+        "path": "./templates"
       }
     },
     "/wiki": {
       "wasm_file": "instruments/wiki.wasm",
-      "cache":     false,
-      "ttl":       60,
+      "cache": false,
+      "ttl": 60,
+      "description": "Complete wiki system with CRUD operations, search, tagging, and responsive UI",
+      "category": "Web",
+      "example": "?page=home",
       "filesystem": {
         "mount": "/wiki",
-        "path":  "./wiki"
+        "path": "./wiki"
       }
     },
-      "/chat": {
-        "wasm_file": "instruments/chat.wasm",
-        "cache": false,
-        "filesystem": {
-          "mount": "/chat",
-          "path": "./chat"
-        }
-    },
-    "/mandelbrot": {
-      "wasm_file": "instruments/mandelbrot.wasm",
-      "cache":     false,
-      "ttl":       0,
-      "filesystem": {}
+    "/chat": {
+      "wasm_file": "instruments/chat.wasm",
+      "cache": false,
+      "description": "Real-time chat application with persistent message storage and responsive interface",
+      "category": "Web",
+      "example": "?action=ui",
+      "filesystem": {
+        "mount": "/chat",
+        "path": "./chat"
+      }
     }
   }
 }
