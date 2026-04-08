@@ -1088,9 +1088,14 @@ func getInstrumentExamples(path string, route Route) []RouteExample {
 	}
 
 	if len(examples) == 0 {
+		defaultQuery := getInstrumentExample(path, route)
+		defaultLabel := "Example"
+		if strings.TrimSpace(defaultQuery) == "" {
+			defaultLabel = "Base example"
+		}
 		examples = append(examples, RouteExample{
-			Label: "Example",
-			Query: getInstrumentExample(path, route),
+			Label: defaultLabel,
+			Query: defaultQuery,
 		})
 	}
 

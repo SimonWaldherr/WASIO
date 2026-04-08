@@ -52,3 +52,14 @@ func TestGetInstrumentUseCaseFallback(t *testing.T) {
 		t.Fatalf("unexpected fallback use case: %q", got)
 	}
 }
+
+func TestGetInstrumentExamplesFallsBackToBaseExample(t *testing.T) {
+	got := getInstrumentExamples("/random", Route{})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 fallback example, got %d", len(got))
+	}
+
+	if got[0].Label != "Base example" || got[0].Query != "" {
+		t.Fatalf("unexpected fallback example: %#v", got[0])
+	}
+}
