@@ -310,53 +310,68 @@ Once WASIO is running, you can test the various instruments:
 
 4. **Calculator**:
 
-   ```bash
+    ```bash
    curl "http://localhost:8080/calculator?op=add&a=15&b=25"
    # Output: 15.00 + 25.00 = 40.00
    
-   curl "http://localhost:8080/calculator?op=pow&a=2&b=8"
-   # Output: 2.00 ^ 8 = 256.00
-   ```
+    curl "http://localhost:8080/calculator?op=pow&a=2&b=8"
+    # Output: 2.00 ^ 8 = 256.00
+
+    curl "http://localhost:8080/calculator?op=mod&a=29&b=5"
+    # Output: 29.00 % 5.00 = 4.00
+    ```
 
 5. **Time Utilities**:
 
-   ```bash
+    ```bash
    curl "http://localhost:8080/time_utils?op=add&duration=2h30m"
    # Output: Time + 2h30m = 2024-07-31T17:30:00Z
-   
-   curl "http://localhost:8080/time_utils?tz=America/New_York&format=kitchen"
-   # Output: Current time: 3:04PM (timezone: America/New_York)
-   ```
+
+    curl "http://localhost:8080/time_utils?tz=America/New_York&format=kitchen"
+    # Output: Current time: 3:04PM (timezone: America/New_York)
+
+    curl "http://localhost:8080/time_utils?op=diff&target=2030-01-01T00:00:00Z"
+    # Output: Difference: 12345h6m7s
+    ```
 
 6. **Text Processing**:
 
-   ```bash
+    ```bash
    curl "http://localhost:8080/text_utils?op=reverse&text=hello%20world"
    # Output: Reversed: dlrow olleh
-   
-   curl "http://localhost:8080/text_utils?op=palindrome&text=racecar"
-   # Output: Is palindrome: true
-   ```
+
+    curl "http://localhost:8080/text_utils?op=palindrome&text=racecar"
+    # Output: Is palindrome: true
+
+    curl "http://localhost:8080/text_utils?op=replace&text=blue%20car%20blue%20sky&old=blue&new=green"
+    # Output: Replaced 'blue' with 'green': green car green sky
+    ```
 
 7. **URL Utilities**:
 
-   ```bash
+    ```bash
    curl "http://localhost:8080/url_utils?op=parse&input=https://example.com/path?key=value"
    # Output: URL components breakdown
-   
-   curl "http://localhost:8080/url_utils?op=encode&input=hello world"
-   # Output: URL encoded: hello%20world
-   ```
+
+    curl "http://localhost:8080/url_utils?op=encode&input=hello world"
+    # Output: URL encoded: hello%20world
+
+    curl "http://localhost:8080/url_utils?op=join&base=https://example.com/api/&input=../health"
+    # Output: Joined URL: https://example.com/health
+    ```
 
 8. **Hash Utilities**:
 
-   ```bash
+    ```bash
    curl "http://localhost:8080/hash_utils?op=sha256&input=hello"
    # Output: SHA256: 2cf24dba4f21d4288cff...
-   
-   curl "http://localhost:8080/hash_utils?op=all&input=test"
-   # Output: All hash formats for 'test'
-   ```
+
+    curl "http://localhost:8080/hash_utils?op=all&input=test"
+    # Output: All hash formats for 'test'
+
+    curl "http://localhost:8080/hash_utils?op=base64encode&input=demo-data"
+    # Output: Base64 encoded: ZGVtby1kYXRh
+    ```
 
 #### Graphics and Data
 
@@ -436,6 +451,35 @@ For the web-based instruments and dashboards, open your browser and navigate to:
 - `http://localhost:8080/wiki` - Full-featured wiki with editing capabilities
 - `http://localhost:8080/chat` - Real-time chat interface
 - `http://localhost:8080/profile?name=YourName&age=30&hobbies=music,travel` - Profile page
+
+### Scenario-Based Example Workflows
+
+These combinations show how the included instruments can be used together for common real-world scenarios:
+
+1. **API prototyping and request debugging**
+   - Start with `/hello_world` to validate routing and parameter passing.
+   - Use `/url_utils?op=parse` and `/url_utils?op=validate` to inspect callback URLs or webhook targets.
+   - Add `/hash_utils?op=sha256` when you need a quick payload fingerprint for debugging or trace correlation.
+
+2. **Reusable data transformation services**
+   - Use `/text_utils` to normalize or analyze free-form text.
+   - Combine `/calculator` and `/time_utils` for lightweight business-rule endpoints such as scheduling helpers or quote calculators.
+   - Route these endpoints behind existing HTTP tooling to create simple internal utilities without deploying a full application.
+
+3. **Compute-heavy or cache-friendly endpoints**
+   - `/fibonacci` is useful for demonstrating deterministic CPU-bound work with response caching.
+   - `/mandelbrot` shows how WASIO can return binary assets such as generated images.
+   - These routes are a good fit for benchmarking, teaching cache behavior, or testing WASM cold-start performance.
+
+4. **File-backed content and collaboration tools**
+   - `/process_file` demonstrates safe, explicit filesystem access for reporting or ingestion tasks.
+   - `/wiki` is a practical example of a content-management workflow with search, tagging, and persistence.
+   - `/chat` shows a lightweight interactive app backed by persisted JSON messages.
+
+5. **HTML rendering and user-facing demos**
+   - `/profile` is ideal for showcasing server-side HTML generation from simple query parameters.
+   - Pair `/profile`, `/wiki`, and the built-in `/` index page when demonstrating WASIO to teammates, students, or workshop attendees.
+   - Add `/monitoring?format=json` to expose machine-readable stats for dashboards or scripted smoke tests.
 
 ## Architecture and Technical Details
 
@@ -567,30 +611,35 @@ WASIO's architecture makes it suitable for various applications:
 - **Language Flexibility**: Write services in any WASM-compatible language
 - **Fast Deployment**: Add new endpoints without server restarts
 - **Resource Efficiency**: Minimal overhead per service
+- **Typical Examples**: Greeting endpoints, request validation, URL normalization, checksum generation
 
 ### 🧮 Computational Services
 - **Mathematical Computations**: Like the Fibonacci and Mandelbrot examples
 - **Data Processing**: File analysis, transformation, and validation
 - **Image/Video Processing**: Graphics generation and manipulation
 - **Scientific Computing**: Numerical analysis and simulations
+- **Typical Examples**: Cached calculation APIs, report generation, visualization backends
 
 ### 🌐 Dynamic Web Applications
 - **Content Management**: Wiki systems, blogs, documentation sites
 - **User Interfaces**: Dynamic HTML generation with templates
 - **Real-time Applications**: Chat systems, live dashboards
 - **Form Processing**: Data collection and validation
+- **Typical Examples**: Internal tools, microsites, onboarding demos, workshop exercises
 
 ### 🏢 Enterprise Applications
 - **Secure Execution**: Run untrusted code safely
 - **Multi-tenancy**: Isolated execution environments per tenant
 - **Plugin Systems**: Extensible applications with user-provided code
 - **Edge Computing**: Lightweight services for edge deployment
+- **Typical Examples**: Customer-specific plugins, approval workflows, branch-office utilities
 
 ### 🎓 Educational and Research
 - **Algorithm Visualization**: Interactive demonstrations
 - **Programming Education**: Safe code execution environments
 - **Research Prototyping**: Rapid development and testing
 - **Benchmarking**: Performance comparison across implementations
+- **Typical Examples**: Classroom labs, hackathon projects, reproducible WASM experiments
 
 ## Contributing
 
