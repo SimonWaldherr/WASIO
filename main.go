@@ -170,6 +170,10 @@ type Route struct {
 	// Zero falls back to Config.DefaultTimeout; still zero means no deadline.
 	TimeoutMs int `json:"timeout_ms,omitempty"`
 
+	// NativeRoutes declares host-side companion routes such as HTTP proxies,
+	// SSE streams, or future WebSocket endpoints that belong to this instrument.
+	NativeRoutes []NativeRouteSpec `json:"native_routes,omitempty"`
+
 	// MaxMemoryPages overrides the global WASM memory limit for this route
 	// (unit: 64 KiB pages). Zero means use the global Config.MaxMemoryPages.
 	// Note: per-route limits require separate runtimes; use sparingly.
@@ -405,12 +409,6 @@ func (r *ResponseCache) Set(key string, data []byte, ttl time.Duration) {
 }
 
 // Server is the main HTTP server with configuration, caches, and context.
-// nativeHandlerRegistrations holds functions that register native (non-WASM)
-// route handlers before the server starts serving. Any file in package main
-// can append to this slice in an init() function to register its handlers
-// without modifying main.go.
-var nativeHandlerRegistrations []func(s *Server)
-
 // Server is the main HTTP server with configuration, caches, and context.
 type Server struct {
 	cfg            *Config
@@ -449,8 +447,8 @@ func NewServer(cfg *Config) *Server {
 		cancel:         cancel,
 		nativeHandlers: make(map[string]http.HandlerFunc),
 	}
-	for _, reg := range nativeHandlerRegistrations {
-		reg(s)
+	if err := s.registerConfiguredNativeRoutes(); err != nil {
+		log.Printf(`{"level":"error","msg":"native route registration failed","error":%q}`, err)
 	}
 	return s
 }

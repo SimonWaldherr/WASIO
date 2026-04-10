@@ -3,7 +3,7 @@
 // LLM instrument – renders the chat UI.
 //
 // WASI preview1 has no socket support, so all actual HTTP calls to the
-// LLM API are handled by the WASIO host (see /_llm/* endpoints in main.go).
+// LLM API are handled by WASIO native routes under /_llm/*.
 // This module's only job is to emit the full-page HTML chat interface.
 //
 // Configuration lives in config.json under the /llm route's "env" block:
@@ -78,11 +78,14 @@ func handleUI() {
     .bubble-user { background:#0d6efd; color:#fff; }
     .bubble-asst { background:#e9ecef; color:#212529; }
     .bubble-error { background:#f8d7da; color:#842029; }
+    .bubble-streaming::after { content:'▍'; animation: blink 1s steps(1,end) infinite; margin-left:2px; opacity:.7; }
     code { background:rgba(0,0,0,.08); border-radius:3px; padding:0 3px; font-size:.88em; }
     pre  { background:rgba(0,0,0,.06); border-radius:6px; padding:.5rem .75rem; overflow-x:auto; }
     #input-bar { background:#fff; border-radius:12px; padding:.75rem; box-shadow:0 2px 8px rgba(0,0,0,.08); }
     #spinner { display:none; }
     .settings-toggle { font-size:.85rem; }
+    .settings-note { font-size:.72rem; color:#6c757d; }
+    @keyframes blink { 50% { opacity: 0; } }
   </style>
 </head>
 <body>
@@ -102,6 +105,26 @@ func handleUI() {
     <div class="collapse mt-2" id="settings">
       <div class="card card-body py-2">
         <div class="row g-2 align-items-end">
+          <div class="col-md-3">
+            <label class="form-label mb-1 small">Provider</label>
+            <select id="sel-provider" class="form-select form-select-sm">
+              <option value="server">Server default</option>
+              <option value="lmstudio">LM Studio</option>
+              <option value="ollama">Ollama</option>
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="groq">Groq</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="col-md-5">
+            <label class="form-label mb-1 small">Base URL</label>
+            <input type="url" class="form-control form-control-sm" id="inp-baseurl" placeholder="Leave empty for server default">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label mb-1 small">API key</label>
+            <input type="password" class="form-control form-control-sm" id="inp-apikey" placeholder="Optional for local runtimes">
+          </div>
           <div class="col-md-5">
             <label class="form-label mb-1 small">Model</label>
             <select id="sel-model" class="form-select form-select-sm"></select>
@@ -115,7 +138,19 @@ func handleUI() {
             <label class="form-label mb-1 small">Max tokens</label>
             <input type="number" class="form-control form-control-sm" id="inp-maxtok" placeholder="∞" min="1" max="32000">
           </div>
-          <div class="col-md-2 d-flex align-items-end">
+          <div class="col-md-2">
+            <div class="form-check mt-4 pt-2">
+              <input class="form-check-input" type="checkbox" id="inp-stream" checked>
+              <label class="form-check-label small" for="inp-stream">Stream</label>
+            </div>
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-outline-secondary w-100" id="btn-refresh-models" onclick="loadModels(true)">↻ Models</button>
+          </div>
+          <div class="col-12">
+            <div class="settings-note" id="settings-status">Using server default connection.</div>
+          </div>
+          <div class="col-md-12 d-flex align-items-end">
             <button class="btn btn-sm btn-outline-danger w-100" onclick="clearChat()">🗑 Clear</button>
           </div>
           <div class="col-12">
@@ -156,22 +191,166 @@ func handleUI() {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+const settingsStorageKey = 'wasio.llm.settings.v2';
+const sessionAPIKeyStorageKey = 'wasio.llm.apiKey';
+const providerPresets = {
+  server: { baseURL: '', apiKeyHint: '' },
+  lmstudio: { baseURL: 'http://localhost:1234/v1', apiKeyHint: 'lm-studio' },
+  ollama: { baseURL: 'http://localhost:11434/v1', apiKeyHint: '' },
+  openai: { baseURL: 'https://api.openai.com/v1', apiKeyHint: '' },
+  openrouter: { baseURL: 'https://openrouter.ai/api/v1', apiKeyHint: '' },
+  groq: { baseURL: 'https://api.groq.com/openai/v1', apiKeyHint: '' },
+  custom: { baseURL: '', apiKeyHint: '' }
+};
+
 let history = [];
 let totalTokens = 0;
+let modelReloadTimer = 0;
 
-async function loadModels() {
+function readStoredSettings() {
+  let stored = {};
   try {
-    const r = await fetch('/_llm/models');
+    stored = JSON.parse(localStorage.getItem(settingsStorageKey) || '{}') || {};
+  } catch {}
+  let apiKey = '';
+  try {
+    apiKey = sessionStorage.getItem(sessionAPIKeyStorageKey) || '';
+  } catch {}
+  return {
+    provider: stored.provider || 'server',
+    baseURL: stored.baseURL || '',
+    model: stored.model || '',
+    temperature: stored.temperature || '0.7',
+    maxTokens: stored.maxTokens || '',
+    system: stored.system || 'You are a helpful assistant.',
+    stream: stored.stream !== false,
+    apiKey,
+  };
+}
+
+function applyStoredSettings() {
+  const stored = readStoredSettings();
+  document.getElementById('sel-provider').value = stored.provider;
+  document.getElementById('inp-baseurl').value = stored.baseURL;
+  document.getElementById('inp-apikey').value = stored.apiKey;
+  document.getElementById('inp-temp').value = stored.temperature;
+  document.getElementById('lbl-temp').textContent = parseFloat(stored.temperature).toFixed(2);
+  document.getElementById('inp-maxtok').value = stored.maxTokens;
+  document.getElementById('inp-system').value = stored.system;
+  document.getElementById('inp-stream').checked = stored.stream;
+}
+
+function persistSettings() {
+  const stored = {
+    provider: document.getElementById('sel-provider').value,
+    baseURL: document.getElementById('inp-baseurl').value.trim(),
+    model: document.getElementById('sel-model').value,
+    temperature: document.getElementById('inp-temp').value,
+    maxTokens: document.getElementById('inp-maxtok').value,
+    system: document.getElementById('inp-system').value,
+    stream: document.getElementById('inp-stream').checked,
+  };
+  try {
+    localStorage.setItem(settingsStorageKey, JSON.stringify(stored));
+  } catch {}
+  try {
+    const apiKey = document.getElementById('inp-apikey').value;
+    if (apiKey) {
+      sessionStorage.setItem(sessionAPIKeyStorageKey, apiKey);
+    } else {
+      sessionStorage.removeItem(sessionAPIKeyStorageKey);
+    }
+  } catch {}
+}
+
+function getConnectionPayload() {
+  const provider = document.getElementById('sel-provider').value;
+  const baseURL = document.getElementById('inp-baseurl').value.trim();
+  const apiKey = document.getElementById('inp-apikey').value;
+  const payload = {};
+  if (provider !== 'server') {
+    if (baseURL) payload.base_url = baseURL;
+    payload.api_key = apiKey;
+  } else {
+    if (baseURL) payload.base_url = baseURL;
+    if (apiKey) payload.api_key = apiKey;
+  }
+  return payload;
+}
+
+function updateSettingsStatus(message, isError) {
+  const el = document.getElementById('settings-status');
+  el.textContent = message;
+  el.style.color = isError ? '#842029' : '#6c757d';
+}
+
+function applyProviderPreset() {
+  const provider = document.getElementById('sel-provider').value;
+  const preset = providerPresets[provider] || providerPresets.custom;
+  const baseURLInput = document.getElementById('inp-baseurl');
+  const apiKeyInput = document.getElementById('inp-apikey');
+  if (provider !== 'custom' && provider !== 'server') {
+    baseURLInput.value = preset.baseURL;
+  }
+  if (provider === 'server') {
+    baseURLInput.value = '';
+    apiKeyInput.value = '';
+  }
+  apiKeyInput.placeholder = provider === 'server' ? 'Optional override of server default' : 'API key for ' + provider;
+  persistSettings();
+  queueModelReload();
+}
+
+function queueModelReload() {
+  persistSettings();
+  clearTimeout(modelReloadTimer);
+  modelReloadTimer = setTimeout(function() {
+    loadModels(true);
+  }, 350);
+}
+
+async function loadModels(preserveSelection) {
+  const sel = document.getElementById('sel-model');
+  const selected = preserveSelection ? sel.value : '';
+  const connection = getConnectionPayload();
+  sel.disabled = true;
+  document.getElementById('btn-refresh-models').disabled = true;
+  updateSettingsStatus('Loading models…', false);
+  try {
+    const req = Object.keys(connection).length === 0
+      ? fetch('/_llm/models')
+      : fetch('/_llm/models', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(connection)
+        });
+    const r = await req;
     const data = await r.json();
-    const sel = document.getElementById('sel-model');
     const models = data.models || [];
     sel.innerHTML = models.length
       ? models.map(function(m){ return '<option value="'+esc(m)+'">'+esc(m)+'</option>'; }).join('')
       : '<option value="">auto-detect</option>';
-    document.getElementById('model-badge').textContent = models[0] || 'auto-detect';
-  } catch {
+    if (selected && models.includes(selected)) {
+      sel.value = selected;
+    } else {
+      const storedModel = readStoredSettings().model;
+      if (storedModel && models.includes(storedModel)) {
+        sel.value = storedModel;
+      }
+    }
+    document.getElementById('model-badge').textContent = sel.value || models[0] || 'auto-detect';
+    updateSettingsStatus(models.length ? 'Loaded ' + models.length + ' model(s).' : 'No models reported by upstream.', false);
+  } catch (e) {
     document.getElementById('sel-model').innerHTML = '<option value="">auto-detect</option>';
     document.getElementById('model-badge').textContent = 'offline?';
+    updateSettingsStatus('Could not load models: ' + e.message, true);
+  } finally {
+    sel.disabled = false;
+    document.getElementById('btn-refresh-models').disabled = false;
+    persistSettings();
   }
 }
 
@@ -192,12 +371,24 @@ function renderMd(text) {
 }
 
 function addBubble(role, content, isError) {
+  return createBubble(role, content, isError);
+}
+
+function createBubble(role, content, isError) {
   const box = document.getElementById('chat-box');
   const row = document.createElement('div');
   row.className = role === 'user' ? 'row-user' : 'row-asst';
   const cls = isError ? 'bubble-error' : (role === 'user' ? 'bubble-user' : 'bubble-asst');
   row.innerHTML = '<div class="lbl">'+esc(role)+'</div><div class="bubble '+cls+'">'+renderMd(content)+'</div>';
   box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+  return row.querySelector('.bubble');
+}
+
+function updateBubble(bubble, content, streaming) {
+  bubble.innerHTML = renderMd(content || '');
+  bubble.classList.toggle('bubble-streaming', !!streaming);
+  const box = document.getElementById('chat-box');
   box.scrollTop = box.scrollHeight;
 }
 
@@ -211,43 +402,77 @@ async function sendMessage() {
   document.getElementById('btn-send').disabled = true;
   document.getElementById('spinner').style.display = 'block';
 
-  const params = new URLSearchParams({
+  const payload = {
     message,
-    system:      document.getElementById('inp-system').value,
-    temperature: document.getElementById('inp-temp').value,
-    history:     JSON.stringify(history),
-  });
+    system: document.getElementById('inp-system').value,
+    temperature: parseFloat(document.getElementById('inp-temp').value),
+    history,
+    stream: document.getElementById('inp-stream').checked,
+  };
+  Object.assign(payload, getConnectionPayload());
   const model = document.getElementById('sel-model').value;
-  if (model) params.set('model', model);
+  if (model) payload.model = model;
   const mt = document.getElementById('inp-maxtok').value;
-  if (mt) params.set('max_tokens', mt);
+  if (mt) payload.max_tokens = parseInt(mt, 10);
 
   try {
-    const r = await fetch('/_llm/chat?' + params.toString());
-    const text = await r.text();
-    let content = '', usedModel = '';
-    try {
-      const data = JSON.parse(text);
-      if (data.error) {
-        addBubble('assistant', '\u26a0 ' + data.error, true);
-      } else {
-        content = data.content || '';
-        usedModel = data.model || '';
-        if (data.usage && data.usage.total_tokens) {
-          totalTokens += data.usage.total_tokens;
-          document.getElementById('cnt-tokens').textContent = totalTokens;
-        }
-        addBubble('assistant', content);
+    let content = '', usedModel = '', usage = null;
+    const r = await fetch('/_llm/chat', {
+      method: 'POST',
+      headers: {
+        'Accept': payload.stream ? 'text/event-stream' : 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!r.ok) {
+      const text = await r.text();
+      try {
+        const data = JSON.parse(text);
+        addBubble('assistant', '\u26a0 ' + (data.error || 'Request failed'), true);
+      } catch {
+        addBubble('assistant', '\u26a0 ' + text, true);
       }
-    } catch {
-      content = text;
-      addBubble('assistant', text);
+      return;
+    }
+
+    const contentType = (r.headers.get('content-type') || '').toLowerCase();
+    if (payload.stream && contentType.includes('text/event-stream') && r.body) {
+      const bubble = createBubble('assistant', '', false);
+      updateBubble(bubble, '', true);
+      const streamed = await consumeOpenAIStream(r.body, bubble);
+      content = streamed.content;
+      usedModel = streamed.model;
+      usage = streamed.usage;
+      updateBubble(bubble, content || '(no content)', false);
+    } else {
+      const text = await r.text();
+      try {
+        const data = JSON.parse(text);
+        if (data.error) {
+          addBubble('assistant', '\u26a0 ' + data.error, true);
+        } else {
+          content = data.content || '';
+          usedModel = data.model || '';
+          usage = data.usage || null;
+          addBubble('assistant', content);
+        }
+      } catch {
+        content = text;
+        addBubble('assistant', text);
+      }
+    }
+
+    if (usage && usage.total_tokens) {
+      totalTokens += usage.total_tokens;
+      document.getElementById('cnt-tokens').textContent = totalTokens;
     }
 
     if (content) {
       history.push({ role: 'user',      content: message });
       history.push({ role: 'assistant', content });
-      // Keep last 20 exchanges to avoid URL length issues
+      // Keep last 20 exchanges to bound request size and prompt growth
       if (history.length > 40) history = history.slice(history.length - 40);
       document.getElementById('cnt-turns').textContent = Math.floor(history.length / 2);
     }
@@ -269,6 +494,85 @@ async function sendMessage() {
   }
 }
 
+async function consumeOpenAIStream(body, bubble) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let usedModel = '';
+  let usage = null;
+
+  while (true) {
+    const part = await reader.read();
+    if (part.done) break;
+    buffer += decoder.decode(part.value, { stream: true });
+    const parsed = processSSEBuffer(buffer, bubble, content, usedModel, usage);
+    buffer = parsed.buffer;
+    content = parsed.content;
+    usedModel = parsed.model;
+    usage = parsed.usage;
+    if (parsed.done) break;
+  }
+
+  if (buffer.trim()) {
+    const parsed = processSSEBuffer(buffer + '\n\n', bubble, content, usedModel, usage);
+    content = parsed.content;
+    usedModel = parsed.model;
+    usage = parsed.usage;
+  }
+
+  return { content, model: usedModel, usage };
+}
+
+function processSSEBuffer(buffer, bubble, content, usedModel, usage) {
+  let done = false;
+  let idx = buffer.indexOf('\n\n');
+  while (idx !== -1) {
+    const block = buffer.slice(0, idx);
+    buffer = buffer.slice(idx + 2);
+    const parsed = parseSSEBlock(block);
+    if (parsed.data === '[DONE]') {
+      done = true;
+      break;
+    }
+    if (parsed.data) {
+      try {
+        const msg = JSON.parse(parsed.data);
+        if (msg.error) {
+          throw new Error(msg.error.message || msg.error);
+        }
+        if (msg.model) usedModel = msg.model;
+        if (msg.usage && msg.usage.total_tokens) usage = msg.usage;
+        const choice = msg.choices && msg.choices[0];
+        const delta = choice && choice.delta ? (choice.delta.content || '') : '';
+        if (delta) {
+          content += delta;
+          updateBubble(bubble, content, true);
+        }
+      } catch (e) {
+        content += '\n\n\u26a0 ' + e.message;
+        updateBubble(bubble, content, false);
+        done = true;
+        break;
+      }
+    }
+    idx = buffer.indexOf('\n\n');
+  }
+  return { buffer, content, model: usedModel, usage, done };
+}
+
+function parseSSEBlock(block) {
+  const lines = block.replace(/\r/g, '').split('\n');
+  const data = [];
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) continue;
+    if (line.startsWith('data:')) {
+      data.push(line.slice(5).trimStart());
+    }
+  }
+  return { data: data.join('\n') };
+}
+
 function clearChat() {
   history = []; totalTokens = 0;
   document.getElementById('chat-box').innerHTML =
@@ -280,11 +584,21 @@ function clearChat() {
 document.getElementById('inp-msg').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
+document.getElementById('sel-provider').addEventListener('change', applyProviderPreset);
+document.getElementById('inp-baseurl').addEventListener('input', queueModelReload);
+document.getElementById('inp-apikey').addEventListener('input', queueModelReload);
+document.getElementById('inp-temp').addEventListener('change', persistSettings);
+document.getElementById('inp-maxtok').addEventListener('input', persistSettings);
+document.getElementById('inp-system').addEventListener('input', persistSettings);
+document.getElementById('inp-stream').addEventListener('change', persistSettings);
 document.getElementById('sel-model').addEventListener('change', function() {
   document.getElementById('model-badge').textContent = this.value || 'auto-detect';
+  persistSettings();
 });
 
-loadModels();
+applyStoredSettings();
+updateSettingsStatus('Using server default connection.', false);
+loadModels(true);
 </script>
 </body>
 </html>`

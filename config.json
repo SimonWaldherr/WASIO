@@ -263,7 +263,27 @@
           "query": "?op=ui&pattern=random&density=0.27&width=96&height=54"
         }
       ],
-      "use_case": "Showcase live browser streaming, emergent simulation, and repeated host-orchestrated WASM execution."
+      "use_case": "Showcase live browser streaming, emergent simulation, and repeated host-orchestrated WASM execution.",
+      "native_routes": [
+        {
+          "path": "/_life/stream",
+          "transport": "sse",
+          "adapter": "wasm-sse",
+          "methods": ["GET"],
+          "wasm_sse": {
+            "seed_op": "seed",
+            "step_op": "step",
+            "state_param": "state",
+            "generation_param": "generation",
+            "interval_param": "interval",
+            "limit_param": "generations",
+            "wrap_param": "wrap",
+            "default_interval": 90,
+            "min_interval": 30,
+            "max_interval": 2000
+          }
+        }
+      ]
     },
     "/mandelbrot": {
       "wasm_file": "instruments/mandelbrot.wasm",
@@ -390,16 +410,8 @@
           "query": "?op=ui"
         },
         {
-          "label": "Single message (native API)",
-          "query": "/_llm/chat?message=What+is+WebAssembly%3F"
-        },
-        {
           "label": "List models (native API)",
           "query": "/_llm/models"
-        },
-        {
-          "label": "Custom temperature",
-          "query": "/_llm/chat?message=Tell+me+a+joke&temperature=1.2&max_tokens=256"
         }
       ],
       "use_case": "Embed a private LLM endpoint into any WASIO deployment – point it at LM Studio for local inference or swap the base URL for OpenAI/Anthropic-compatible APIs.",
@@ -408,7 +420,35 @@
         "OPENAI_API_KEY":  "lm-studio",
         "OPENAI_MODEL":    "",
         "OPENAI_SYSTEM":   "You are a helpful assistant."
-      }
+      },
+      "native_routes": [
+        {
+          "path": "/_llm/models",
+          "transport": "https",
+          "adapter": "openai-compatible",
+          "methods": ["GET", "POST"],
+          "openai": {
+            "operation": "models",
+            "base_url_env": "OPENAI_BASE_URL",
+            "api_key_env": "OPENAI_API_KEY",
+            "timeout_ms": 120000
+          }
+        },
+        {
+          "path": "/_llm/chat",
+          "transport": "https",
+          "adapter": "openai-compatible",
+          "methods": ["POST"],
+          "openai": {
+            "operation": "chat",
+            "base_url_env": "OPENAI_BASE_URL",
+            "api_key_env": "OPENAI_API_KEY",
+            "model_env": "OPENAI_MODEL",
+            "system_env": "OPENAI_SYSTEM",
+            "timeout_ms": 120000
+          }
+        }
+      ]
     },
     "/stats_utils": {
       "wasm_file": "instruments/stats_utils.wasm",

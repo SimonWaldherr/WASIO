@@ -35,7 +35,7 @@ WASIO is usable today as a local platform, internal tool runner, or self-hosted 
 
 The project has evolved substantially beyond the original demo server. The important additions are:
 
-- Universal native handler registry instead of hardcoded instrument logic in `main.go`
+- Declarative `native_routes` instead of hardcoded instrument-specific host files
 - Host-side OpenAI-compatible LLM bridge for LM Studio / OpenAI-style APIs
 - Automatic hot reload for rebuilt `.wasm` files plus `/_reload`
 - Structured JSON access logs with optional request IDs
@@ -213,18 +213,72 @@ Notes:
 - `Cookie` and `Set-Cookie` are intentionally not forwarded into guest payloads.
 - Pure WASI modules do not have general outbound networking. If an instrument needs network access, implement it as a native host bridge.
 
-## Native Host Handlers
+## Native Routes
 
-Some capabilities do not belong inside pure WASI modules. WASIO now supports native host handlers registered outside `main.go`.
+Some capabilities do not belong inside pure WASI modules. WASIO now supports declarative host-side companion routes via `native_routes` on any instrument.
 
-This is how the LLM integration works:
+The important design change is that these routes are no longer implemented as one-off files like `llm_native.go` or `life_native.go`. Instead, each instrument declares what it needs, and WASIO binds the matching generic adapter dynamically at startup.
 
-- `/llm` is the WebAssembly UI instrument
-- `/_llm/chat` and `/_llm/models` are native Go endpoints
-- the browser talks to the native endpoints
-- the host performs the HTTP call to LM Studio / OpenAI-compatible APIs
+Current built-in adapters:
 
-This pattern is the bridge toward Cloudflare/wasmCloud-style host capabilities: keep the guest small and pure, move privileged integration to the host.
+- `openai-compatible`: host-side HTTP/HTTPS bridge for OpenAI-style APIs
+- `wasm-sse`: streamed Server-Sent Events driven by repeated WASM execution
+
+Example:
+
+```json
+{
+  "/llm": {
+    "wasm_file": "instruments/llm.wasm",
+    "native_routes": [
+      {
+        "path": "/_llm/models",
+        "transport": "https",
+        "adapter": "openai-compatible",
+        "methods": ["GET", "POST"],
+        "openai": {
+          "operation": "models"
+        }
+      },
+      {
+        "path": "/_llm/chat",
+        "transport": "https",
+        "adapter": "openai-compatible",
+        "methods": ["POST"],
+        "openai": {
+          "operation": "chat"
+        }
+      }
+    ]
+  }
+}
+```
+
+`/_llm/models` supports both `GET` and JSON `POST`. The `POST` form is useful when the UI wants to probe a different OpenAI-compatible base URL or API key without leaking credentials into the URL. `/_llm/chat` expects a JSON `POST` body so chat history, prompts, and token settings do not leak into URLs or access logs.
+
+If the request body includes `"stream": true`, the same `POST /_llm/chat` route returns an OpenAI-compatible `text/event-stream` response for incremental token delivery.
+
+The LLM demo uses this to auto-load available models for the currently selected provider or custom endpoint and then exposes them directly in the model picker.
+
+And for Conway's Game of Life:
+
+```json
+{
+  "/life": {
+    "wasm_file": "instruments/life.wasm",
+    "native_routes": [
+      {
+        "path": "/_life/stream",
+        "transport": "sse",
+        "adapter": "wasm-sse",
+        "methods": ["GET"]
+      }
+    ]
+  }
+}
+```
+
+This is the bridge toward Cloudflare/wasmCloud-style host capabilities: keep the guest small and pure, move privileged integration to the host, and describe the host behavior declaratively.
 
 ## Hot Reload
 

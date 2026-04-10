@@ -31,6 +31,7 @@ type Manifest struct {
 	Route        ManifestRoute        `toml:"route"`
 	Metadata     ManifestMetadata     `toml:"metadata"`
 	Examples     []ManifestExample    `toml:"examples,omitempty"`
+	NativeRoutes []NativeRouteSpec    `toml:"native_routes,omitempty"`
 	Capabilities ManifestCapabilities `toml:"capabilities"`
 	Signature    *ManifestSignature   `toml:"signature,omitempty"`
 }
@@ -143,6 +144,10 @@ func (m *Manifest) CanonicalCapabilityPayload() ([]byte, error) {
 	nativeRoutes := append([]string(nil), m.Capabilities.NativeRoutes...)
 	sort.Strings(names)
 	sort.Strings(nativeRoutes)
+	nativeRouteSpecs := append([]NativeRouteSpec(nil), m.NativeRoutes...)
+	sort.Slice(nativeRouteSpecs, func(i, j int) bool {
+		return nativeRouteSpecs[i].Path < nativeRouteSpecs[j].Path
+	})
 	type capabilityEnvelope struct {
 		Schema       int      `json:"schema"`
 		Name         string   `json:"name"`
@@ -151,6 +156,7 @@ func (m *Manifest) CanonicalCapabilityPayload() ([]byte, error) {
 		ModuleSource string   `json:"module_source"`
 		Capabilities []string `json:"capabilities"`
 		NativeRoutes []string `json:"native_routes,omitempty"`
+		NativeSpecs  []NativeRouteSpec `json:"native_route_specs,omitempty"`
 	}
 	return json.Marshal(capabilityEnvelope{
 		Schema:       m.Schema,
@@ -160,6 +166,7 @@ func (m *Manifest) CanonicalCapabilityPayload() ([]byte, error) {
 		ModuleSource: m.Module.Source,
 		Capabilities: names,
 		NativeRoutes: nativeRoutes,
+		NativeSpecs:  nativeRouteSpecs,
 	})
 }
 
@@ -241,6 +248,7 @@ func ManifestToRoute(m *Manifest, wasmPath string) Route {
 		UseCase:     m.Metadata.UseCase,
 		Methods:     append([]string(nil), m.Route.Methods...),
 		TimeoutMs:   m.Route.TimeoutMs,
+		NativeRoutes: append([]NativeRouteSpec(nil), m.NativeRoutes...),
 	}
 	if len(m.Examples) > 0 {
 		route.Example = m.Examples[0].Query
