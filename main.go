@@ -377,13 +377,27 @@ func (r *ResponseCache) Set(key string, data []byte, ttl time.Duration) {
 }
 
 // Server is the main HTTP server with configuration, caches, and context.
+// nativeHandlerRegistrations holds functions that register native (non-WASM)
+// route handlers before the server starts serving. Any file in package main
+// can append to this slice in an init() function to register its handlers
+// without modifying main.go.
+var nativeHandlerRegistrations []func(s *Server)
+
+// Server is the main HTTP server with configuration, caches, and context.
 type Server struct {
-	cfg    *Config
-	modC   *ModuleCache
-	respC  *ResponseCache
-	stats  *ServerStats
-	ctx    context.Context
-	cancel context.CancelFunc
+	cfg            *Config
+	modC           *ModuleCache
+	respC          *ResponseCache
+	stats          *ServerStats
+	ctx            context.Context
+	cancel         context.CancelFunc
+	nativeHandlers map[string]http.HandlerFunc
+}
+
+// RegisterNativeHandler registers a native Go handler at the given path.
+// Native handlers take precedence over WASM routes for the same path.
+func (s *Server) RegisterNativeHandler(path string, h http.HandlerFunc) {
+	s.nativeHandlers[path] = h
 }
 
 // requestPayload is the JSON structure sent to the WASM module on stdin.
@@ -393,16 +407,22 @@ type requestPayload struct {
 }
 
 // NewServer initializes a Server with caches and context for shutdown.
+// It also runs all registered native-handler registrations.
 func NewServer(cfg *Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{
-		cfg:    cfg,
-		modC:   NewModuleCache(ctx, cfg.CacheSize),
-		respC:  NewResponseCache(cfg.CacheSize),
-		stats:  NewServerStats(),
-		ctx:    ctx,
-		cancel: cancel,
+	s := &Server{
+		cfg:            cfg,
+		modC:           NewModuleCache(ctx, cfg.CacheSize),
+		respC:          NewResponseCache(cfg.CacheSize),
+		stats:          NewServerStats(),
+		ctx:            ctx,
+		cancel:         cancel,
+		nativeHandlers: make(map[string]http.HandlerFunc),
 	}
+	for _, reg := range nativeHandlerRegistrations {
+		reg(s)
+	}
+	return s
 }
 
 // healthHandler responds with 200 OK for liveness probes.
@@ -458,422 +478,310 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
-// ── LLM native handlers ───────────────────────────────────────────────────────
-//
-// WASI preview1 has no socket support, so all outbound HTTP calls to the LLM
-// API (e.g. LM Studio / OpenAI-compatible endpoints) are handled here in the
-// WASIO host rather than inside the llm.wasm module.
-//
-// Configuration is read from the /llm route's "env" block in config.json:
-//   OPENAI_BASE_URL  – base URL of the OpenAI-compatible API
-//   OPENAI_API_KEY   – API key (e.g. "lm-studio" for LM Studio)
-//   OPENAI_MODEL     – default model name (empty = picked by server)
-//   OPENAI_SYSTEM    – system prompt shown to the model
-
-type llmSettings struct {
-	BaseURL      string
-	APIKey       string
-	Model        string
-	SystemPrompt string
+// categoryBadgeColor maps a category name to a Bootstrap color token.
+func categoryBadgeColor(cat string) string {
+	switch strings.ToLower(cat) {
+	case "ai":
+		return "success"
+	case "math":
+		return "info"
+	case "security":
+		return "danger"
+	case "network":
+		return "warning"
+	case "utils":
+		return "primary"
+	case "graphics":
+		return "dark"
+	case "basic":
+		return "secondary"
+	default:
+		return "secondary"
+	}
 }
 
-func (s *Server) llmBaseConfig() llmSettings {
-	c := llmSettings{
-		BaseURL:      "http://localhost:1234/v1",
-		APIKey:       "lm-studio",
-		Model:        "",
-		SystemPrompt: "You are a helpful assistant.",
-	}
-	if route, ok := s.cfg.Routes["/llm"]; ok {
-		if v := route.Env["OPENAI_BASE_URL"]; v != "" {
-			c.BaseURL = v
-		}
-		if v := route.Env["OPENAI_API_KEY"]; v != "" {
-			c.APIKey = v
-		}
-		if v := route.Env["OPENAI_MODEL"]; v != "" {
-			c.Model = v
-		}
-		if v := route.Env["OPENAI_SYSTEM"]; v != "" {
-			c.SystemPrompt = v
-		}
-	}
-	return c
-}
-
-// newLLMClient returns a pre-configured HTTP client for LLM API calls.
-func newLLMClient() *http.Client {
-	return &http.Client{Timeout: 120 * time.Second}
-}
-
-// llmModelsHandler handles GET /_llm/models and proxies to {baseURL}/models.
-func (s *Server) llmModelsHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := s.llmBaseConfig()
-	client := newLLMClient()
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, cfg.BaseURL+"/models", nil)
-	if err != nil {
-		http.Error(w, `{"error":"failed to build request"}`, http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, `{"error":"LLM API unreachable: %s"}`, strings.ReplaceAll(err.Error(), `"`, `'`))
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, `{"error":"failed to read response"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
-}
-
-// llmChatHandler handles GET /_llm/chat and forwards to {baseURL}/chat/completions.
-//
-// Query parameters:
-//
-//	message    – the user's current message (required)
-//	system     – override system prompt (optional)
-//	model      – override model name (optional)
-//	temperature – float, default 0.7 (optional)
-//	max_tokens  – integer, default 2048 (optional)
-//	history    – JSON array of {"role":"user"|"assistant","content":"..."} (optional)
-func (s *Server) llmChatHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := s.llmBaseConfig()
-	q := r.URL.Query()
-
-	message := q.Get("message")
-	if message == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"error":"missing message parameter"}`)
-		return
-	}
-
-	systemPrompt := cfg.SystemPrompt
-	if s := q.Get("system"); s != "" {
-		systemPrompt = s
-	}
-	model := cfg.Model
-	if m := q.Get("model"); m != "" {
-		model = m
-	}
-	temperature := 0.7
-	if t := q.Get("temperature"); t != "" {
-		if parsed, err := fmt.Sscanf(t, "%f", &temperature); parsed != 1 || err != nil {
-			temperature = 0.7
-		}
-	}
-	maxTokens := 2048
-	if mt := q.Get("max_tokens"); mt != "" {
-		if parsed, err := fmt.Sscanf(mt, "%d", &maxTokens); parsed != 1 || err != nil {
-			maxTokens = 2048
-		}
-	}
-
-	type chatMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	messages := []chatMessage{{Role: "system", Content: systemPrompt}}
-
-	// Inject history if provided
-	if histJSON := q.Get("history"); histJSON != "" {
-		var history []chatMessage
-		if err := json.Unmarshal([]byte(histJSON), &history); err == nil {
-			messages = append(messages, history...)
-		}
-	}
-	messages = append(messages, chatMessage{Role: "user", Content: message})
-
-	type chatRequest struct {
-		Model       string        `json:"model,omitempty"`
-		Messages    []chatMessage `json:"messages"`
-		Temperature float64       `json:"temperature"`
-		MaxTokens   int           `json:"max_tokens"`
-	}
-
-	payload := chatRequest{
-		Model:       model,
-		Messages:    messages,
-		Temperature: temperature,
-		MaxTokens:   maxTokens,
-	}
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		http.Error(w, `{"error":"failed to marshal request"}`, http.StatusInternalServerError)
-		return
-	}
-
-	client := newLLMClient()
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
-		cfg.BaseURL+"/chat/completions", bytes.NewReader(bodyBytes))
-	if err != nil {
-		http.Error(w, `{"error":"failed to build request"}`, http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, `{"error":"LLM API unreachable: %s"}`, strings.ReplaceAll(err.Error(), `"`, `'`))
-		return
-	}
-	defer resp.Body.Close()
-
-	var apiResp struct {
-		ID      string `json:"id"`
-		Model   string `json:"model"`
-		Choices []struct {
-			Message struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-		} `json:"usage"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error,omitempty"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprint(w, `{"error":"failed to parse LLM API response"}`)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	if apiResp.Error != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{"error": apiResp.Error.Message})
-		return
-	}
-
-	if len(apiResp.Choices) == 0 {
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprint(w, `{"error":"no choices returned by LLM API"}`)
-		return
-	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"content": apiResp.Choices[0].Message.Content,
-		"role":    apiResp.Choices[0].Message.Role,
-		"model":   apiResp.Model,
-		"usage":   apiResp.Usage,
-	})
+// pathToID converts a URL path to a safe HTML id substring.
+func pathToID(path string) string {
+	r := strings.NewReplacer("/", "_", "-", "_", ".", "_")
+	return r.Replace(strings.TrimPrefix(path, "/"))
 }
 
 // indexHandler serves the main index page with all active instruments.
 func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WASIO - WebAssembly System Interface Orchestrator</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .instrument-card { transition: transform 0.2s; }
-        .instrument-card:hover { transform: translateY(-2px); }
-        .stats-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
-        .stat-number { font-size: 2rem; font-weight: bold; }
-        .example-code { display: block; white-space: normal; word-break: break-all; }
-    </style>
-</head>
-<body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container">
-            <a class="navbar-brand" href="/">
-                <strong>WASIO</strong> <small>WebAssembly System Interface Orchestrator</small>
-            </a>
-            <div class="navbar-nav ms-auto">
-                <a class="nav-link" href="/monitoring">📊 Monitoring</a>
-                <a class="nav-link" href="/_reload">🔄 Reload</a>
-                <a class="nav-link" href="/health">❤️ Health</a>
-            </div>
-        </div>
-    </nav>
-
-    <div class="container mt-4">
-        <div class="row">
-            <div class="col-12">
-                <h1>Welcome to WASIO</h1>
-                <p class="lead">Dynamically execute WebAssembly instruments through HTTP requests</p>
-            </div>
-        </div>`
-
-	// Add quick stats if monitoring is enabled
-	if s.cfg.Monitoring {
-		stats := s.stats.GetStats()
-		uptime := time.Since(stats.StartTime)
-
-		html += fmt.Sprintf(`
-        <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="card stats-card">
-                    <div class="card-body text-center">
-                        <div class="stat-number">%d</div>
-                        <div>Total Requests</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card stats-card">
-                    <div class="card-body text-center">
-                        <div class="stat-number">%d</div>
-                        <div>Active Routes</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card stats-card">
-                    <div class="card-body text-center">
-                        <div class="stat-number">%.1f%%</div>
-                        <div>Cache Hit Rate</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card stats-card">
-                    <div class="card-body text-center">
-                        <div class="stat-number">%s</div>
-                        <div>Uptime</div>
-                    </div>
-                </div>
-            </div>
-        </div>`,
-			stats.TotalRequests,
-			len(s.cfg.Routes),
-			func() float64 {
-				total := stats.CacheHits + stats.CacheMisses
-				if total == 0 {
-					return 0
-				}
-				return float64(stats.CacheHits) / float64(total) * 100
-			}(),
-			formatDuration(uptime),
-		)
-	}
-
-	html += `
-        <div class="row">
-            <div class="col-12">
-                <h2>Available Instruments</h2>
-                <p>Click on any instrument to test it or view its documentation.</p>
-            </div>
-        </div>
-        
-        <div class="row">`
-
-	// List all available routes in a stable order
+	// ── group routes by category ──────────────────────────────────────────────
 	paths := make([]string, 0, len(s.cfg.Routes))
 	for path := range s.cfg.Routes {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 
+	categoryRoutes := map[string][]string{}
 	for _, path := range paths {
-		route := s.cfg.Routes[path]
-		// Try to determine instrument type and description
-		instrumentName := strings.TrimPrefix(path, "/")
-		description := getInstrumentDescription(instrumentName, route)
-		category := getInstrumentCategory(instrumentName, route)
-		useCase := getInstrumentUseCase(instrumentName, route)
-		exampleActions := renderExampleActions(r.Host, path, getInstrumentExamples(path, route))
+		cat := getInstrumentCategory(strings.TrimPrefix(path, "/"), s.cfg.Routes[path])
+		categoryRoutes[cat] = append(categoryRoutes[cat], path)
+	}
+	categories := make([]string, 0, len(categoryRoutes))
+	for cat := range categoryRoutes {
+		categories = append(categories, cat)
+	}
+	sort.Strings(categories)
 
-		html += fmt.Sprintf(`
-            <div class="col-md-6 col-lg-4 mb-3">
-                <div class="card instrument-card h-100">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            %s <span class="badge bg-secondary">%s</span>
-                        </h5>
-                        <p class="card-text">%s</p>
-                        <p class="small mb-3"><strong>Use case:</strong> %s</p>
-                        <div class="mb-2">
-                            <small class="text-muted">
-                                📁 %s<br>
-                                🎯 Cache: %t<br>
-                                ⏱️ TTL: %ds
-                            </small>
-                        </div>
-                        <div class="mb-3">
-                            <small class="text-muted d-block mb-2">Example flows</small>
-                            %s
-                        </div>
-                        <div class="d-flex flex-wrap gap-1">
-                            <a href="%s" class="btn btn-outline-primary btn-sm" target="_blank">Base URL</a>
-                        </div>
-                    </div>
-                </div>
-            </div>`,
-			htmlpkg.EscapeString(instrumentName),
-			htmlpkg.EscapeString(category),
-			htmlpkg.EscapeString(description),
-			htmlpkg.EscapeString(useCase),
-			htmlpkg.EscapeString(route.WASMFile),
-			route.Cache,
-			getTTL(route, s.cfg.CacheTTL),
-			exampleActions,
-			htmlpkg.EscapeString(buildExamplePath(path, "")),
+	// ── stats ─────────────────────────────────────────────────────────────────
+	var statsBar string
+	if s.cfg.Monitoring {
+		stats := s.stats.GetStats()
+		cacheRate := 0.0
+		if total := stats.CacheHits + stats.CacheMisses; total > 0 {
+			cacheRate = float64(stats.CacheHits) / float64(total) * 100
+		}
+		statsBar = fmt.Sprintf(`
+<div class="bg-dark text-white py-2 mb-0">
+  <div class="container-fluid px-4">
+    <div class="d-flex flex-wrap gap-4 align-items-center small">
+      <span>⏱ Uptime <strong>%s</strong></span>
+      <span>📥 Requests <strong>%d</strong></span>
+      <span>🗂 Routes <strong>%d</strong></span>
+      <span>🎯 Cache hit rate <strong>%.0f%%</strong></span>
+      <span class="ms-auto text-muted">avg %s / req</span>
+    </div>
+  </div>
+</div>`,
+			formatDuration(time.Since(stats.StartTime)),
+			stats.TotalRequests,
+			len(s.cfg.Routes),
+			cacheRate,
+			stats.AverageResponse.Round(time.Millisecond),
 		)
 	}
 
-	html += `
+	// ── category filter pills ─────────────────────────────────────────────────
+	var filterPills strings.Builder
+	filterPills.WriteString(`<button class="btn btn-sm btn-dark active" onclick="setCategory('',this)">All</button>`)
+	for _, cat := range categories {
+		filterPills.WriteString(fmt.Sprintf(
+			`<button class="btn btn-sm btn-outline-secondary" onclick="setCategory('%s',this)">%s</button>`,
+			htmlpkg.EscapeString(cat), htmlpkg.EscapeString(cat),
+		))
+	}
+
+	// ── instrument cards ──────────────────────────────────────────────────────
+	var cardsHTML strings.Builder
+	for _, cat := range categories {
+		color := categoryBadgeColor(cat)
+		cardsHTML.WriteString(fmt.Sprintf(`
+<div class="category-section mb-5" data-cat="%s">
+  <h5 class="text-uppercase text-muted fw-semibold mb-3 border-bottom pb-1 d-flex align-items-center gap-2">
+    <span class="badge bg-%s">%s</span>
+    <span>%s</span>
+  </h5>
+  <div class="row g-3">`,
+			htmlpkg.EscapeString(cat), color, htmlpkg.EscapeString(cat), htmlpkg.EscapeString(cat),
+		))
+
+		for _, path := range categoryRoutes[cat] {
+			route := s.cfg.Routes[path]
+			name := strings.TrimPrefix(path, "/")
+			desc := getInstrumentDescription(name, route)
+			useCase := getInstrumentUseCase(name, route)
+			examples := getInstrumentExamples(path, route)
+			id := pathToID(path)
+			ttl := getTTL(route, s.cfg.CacheTTL)
+
+			// cache badge
+			cacheBadge := ""
+			if route.Cache {
+				cacheBadge = fmt.Sprintf(
+					`<span class="badge bg-success-subtle text-success border border-success-subtle ms-1" title="Cached %ds">⚡ %ds</span>`,
+					ttl, ttl,
+				)
+			}
+
+			// first example → primary action button
+			firstAction := ""
+			if len(examples) > 0 {
+				ex := examples[0]
+				rel := buildExamplePath(path, ex.Query)
+				abs := buildAbsoluteExampleURL(r.Host, path, ex.Query)
+				firstAction = fmt.Sprintf(`
+      <div class="d-flex gap-1 mb-1">
+        <a href="%s" class="btn btn-primary btn-sm flex-grow-1 text-truncate" target="_blank" title="%s">▶ %s</a>
+        <button class="btn btn-outline-secondary btn-sm px-2" onclick="copyUrl(%q,this)" title="Copy URL">⎘</button>
+      </div>`,
+					htmlpkg.EscapeString(rel),
+					htmlpkg.EscapeString(rel),
+					htmlpkg.EscapeString(ex.Label),
+					abs,
+				)
+			}
+
+			// extra examples → collapsible
+			extraExamples := ""
+			if len(examples) > 1 {
+				var extra strings.Builder
+				extra.WriteString(fmt.Sprintf(
+					`<div class="collapse mt-1" id="more-%s">`, id,
+				))
+				for _, ex := range examples[1:] {
+					rel := buildExamplePath(path, ex.Query)
+					abs := buildAbsoluteExampleURL(r.Host, path, ex.Query)
+					extra.WriteString(fmt.Sprintf(`
+        <div class="d-flex gap-1 mb-1">
+          <a href="%s" class="btn btn-outline-primary btn-sm flex-grow-1 text-truncate" target="_blank" title="%s">%s</a>
+          <button class="btn btn-outline-secondary btn-sm px-2" onclick="copyUrl(%q,this)" title="Copy URL">⎘</button>
+        </div>`,
+						htmlpkg.EscapeString(rel),
+						htmlpkg.EscapeString(rel),
+						htmlpkg.EscapeString(ex.Label),
+						abs,
+					))
+				}
+				extra.WriteString(`</div>`)
+				extra.WriteString(fmt.Sprintf(
+					`<button class="btn btn-link btn-sm p-0 mt-1 text-muted" data-bs-toggle="collapse" data-bs-target="#more-%s">+%d more</button>`,
+					id, len(examples)-1,
+				))
+				extraExamples = extra.String()
+			}
+
+			cardsHTML.WriteString(fmt.Sprintf(`
+    <div class="col-sm-6 col-xl-4 instrument-card" data-cat="%s" data-search="%s">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <div class="d-flex align-items-center flex-wrap gap-1 mb-2">
+            <code class="fs-6 fw-bold text-primary">/%s</code>
+            <span class="badge bg-%s rounded-pill">%s</span>
+            %s
+          </div>
+          <p class="card-text text-muted small mb-1 flex-grow-1" title="%s">%s</p>
+          <p class="card-text text-muted" style="font-size:.75rem" title="%s"><em>%s</em></p>
+          <div class="mt-auto pt-2">
+            %s%s
+          </div>
         </div>
+      </div>
+    </div>`,
+				htmlpkg.EscapeString(cat),
+				htmlpkg.EscapeString(strings.ToLower(name+" "+desc+" "+cat)),
+				htmlpkg.EscapeString(name),
+				color,
+				htmlpkg.EscapeString(cat),
+				cacheBadge,
+				htmlpkg.EscapeString(desc),
+				htmlpkg.EscapeString(desc),
+				htmlpkg.EscapeString(useCase),
+				htmlpkg.EscapeString(useCase),
+				firstAction,
+				extraExamples,
+			))
+		}
+
+		cardsHTML.WriteString(`
+  </div>
+</div>`)
+	}
+
+	// ── full page ─────────────────────────────────────────────────────────────
+	page := `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASIO – Instrument Overview</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f8f9fa; }
+    .instrument-card { transition: transform .15s, box-shadow .15s; }
+    .instrument-card .card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.12) !important; }
+    .instrument-card .card-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    #search { max-width: 340px; }
+    .category-section.d-none-cat { display: none !important; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+  <div class="container-fluid px-4">
+    <a class="navbar-brand fw-bold" href="/"><strong>WASIO</strong></a>
+    <div class="navbar-nav ms-auto flex-row gap-2">
+      <a class="nav-link" href="/monitoring">📊 Monitoring</a>
+      <a class="nav-link" href="/_reload">🔄 Reload</a>
+      <a class="nav-link" href="/health">❤️ Health</a>
     </div>
+  </div>
+</nav>
+` + statsBar + `
+<div class="container-fluid px-4 py-4">
+  <div class="d-flex flex-wrap align-items-center gap-3 mb-4">
+    <input id="search" type="search" class="form-control form-control-sm" placeholder="Search instruments…" oninput="filterInstruments()">
+    <div id="cat-filters" class="d-flex flex-wrap gap-2">` + filterPills.String() + `</div>
+    <span id="count-badge" class="badge bg-secondary ms-auto"></span>
+  </div>
+  <div id="instrument-grid">` + cardsHTML.String() + `</div>
+  <p id="no-results" class="text-center text-muted py-5 d-none">No instruments match your filter.</p>
+</div>
 
-    <footer class="bg-light mt-5 py-4">
-        <div class="container text-center">
-            <p class="mb-0">
-                <strong>WASIO</strong> - WebAssembly System Interface Orchestrator<br>
-                <small class="text-muted">Powered by <a href="https://github.com/tetratelabs/wazero">Wazero</a> WebAssembly runtime</small>
-            </p>
-        </div>
-    </footer>
+<footer class="bg-light border-top py-3 mt-4">
+  <div class="container-fluid px-4 text-center text-muted small">
+    <strong>WASIO</strong> · WebAssembly System Interface Orchestrator ·
+    Powered by <a href="https://github.com/tetratelabs/wazero">Wazero</a>
+  </div>
+</footer>
 
-    <script>
-        function copyUrl(url, button) {
-            navigator.clipboard.writeText(url).then(() => {
-                const originalText = button.textContent;
-                button.textContent = 'Copied!';
-                button.classList.remove('btn-outline-secondary');
-                button.classList.add('btn-success');
-                setTimeout(() => {
-                    button.textContent = originalText;
-                    button.classList.remove('btn-success');
-                    button.classList.add('btn-outline-secondary');
-                }, 2000);
-            });
-        }
-    </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  let activeCategory = '';
+
+  function setCategory(cat, btn) {
+    activeCategory = cat;
+    document.querySelectorAll('#cat-filters button').forEach(b => {
+      b.classList.toggle('active', b === btn);
+      b.classList.toggle('btn-dark', b === btn);
+      b.classList.toggle('btn-outline-secondary', b !== btn);
+    });
+    filterInstruments();
+  }
+
+  function filterInstruments() {
+    const q = document.getElementById('search').value.toLowerCase().trim();
+    let visible = 0;
+
+    document.querySelectorAll('.category-section').forEach(section => {
+      const cat = section.dataset.cat;
+      const catMatch = !activeCategory || cat === activeCategory;
+
+      let sectionVisible = false;
+      section.querySelectorAll('.instrument-card').forEach(card => {
+        const searchMatch = !q || card.dataset.search.includes(q);
+        const show = catMatch && searchMatch;
+        card.style.display = show ? '' : 'none';
+        if (show) { sectionVisible = true; visible++; }
+      });
+      section.style.display = sectionVisible ? '' : 'none';
+    });
+
+    const badge = document.getElementById('count-badge');
+    badge.textContent = visible + ' instrument' + (visible !== 1 ? 's' : '');
+    document.getElementById('no-results').classList.toggle('d-none', visible > 0);
+  }
+
+  function copyUrl(url, btn) {
+    navigator.clipboard.writeText(url).then(() => {
+      const t = btn.textContent;
+      btn.textContent = '✓';
+      btn.classList.add('btn-success');
+      btn.classList.remove('btn-outline-secondary');
+      setTimeout(() => { btn.textContent = t; btn.classList.remove('btn-success'); btn.classList.add('btn-outline-secondary'); }, 1800);
+    });
+  }
+
+  // initialise count badge
+  filterInstruments();
+</script>
 </body>
 </html>`
 
-	w.Write([]byte(html))
+	w.Write([]byte(page))
 }
 
 // monitoringHandler serves detailed server statistics and monitoring information.
@@ -1189,12 +1097,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/_reload":
 		s.reloadHandler(w, r)
 		return
-	case "/_llm/models":
-		s.llmModelsHandler(w, r)
-		return
-	case "/_llm/chat":
-		s.llmChatHandler(w, r)
-		return
 	case "/":
 		if s.cfg.IndexPage {
 			s.indexHandler(w, r)
@@ -1205,6 +1107,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.monitoringHandler(w, r)
 			return
 		}
+	}
+
+	// Dispatch to registered native handlers (non-WASM, instrument-specific)
+	if h, ok := s.nativeHandlers[path]; ok {
+		h(w, r)
+		return
 	}
 
 	// Handle proxy paths specially
