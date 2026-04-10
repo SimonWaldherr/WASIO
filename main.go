@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	htmlpkg "html"
 	"io"
 	"io/ioutil"
 	"log"
@@ -29,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -126,6 +128,11 @@ func (s *ServerStats) GetStats() ServerStats {
 }
 
 // Route defines a single HTTP endpoint mapped to a WASM module.
+type RouteExample struct {
+	Label string `json:"label"`
+	Query string `json:"query"`
+}
+
 type Route struct {
 	// Path to the compiled WebAssembly module (WASI target).
 	WASMFile string `json:"wasm_file"`
@@ -143,9 +150,11 @@ type Route struct {
 	} `json:"filesystem"`
 
 	// Metadata for display and documentation
-	Description string `json:"description,omitempty"` // Human-readable description
-	Category    string `json:"category,omitempty"`    // Category for grouping (Basic, Math, etc.)
-	Example     string `json:"example,omitempty"`     // Example query parameters or usage
+	Description string         `json:"description,omitempty"` // Human-readable description
+	Category    string         `json:"category,omitempty"`    // Category for grouping (Basic, Math, etc.)
+	Example     string         `json:"example,omitempty"`     // Example query parameters or usage
+	Examples    []RouteExample `json:"examples,omitempty"`    // Additional example queries shown on the index page
+	UseCase     string         `json:"use_case,omitempty"`    // Practical use case shown on the index page
 }
 
 // Config represents the server configuration loaded from JSON.
@@ -355,6 +364,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
         .instrument-card:hover { transform: translateY(-2px); }
         .stats-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
         .stat-number { font-size: 2rem; font-weight: bold; }
+        .example-code { display: block; white-space: normal; word-break: break-all; }
     </style>
 </head>
 <body>
@@ -441,13 +451,21 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
         
         <div class="row">`
 
-	// List all available routes
-	for path, route := range s.cfg.Routes {
+	// List all available routes in a stable order
+	paths := make([]string, 0, len(s.cfg.Routes))
+	for path := range s.cfg.Routes {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		route := s.cfg.Routes[path]
 		// Try to determine instrument type and description
 		instrumentName := strings.TrimPrefix(path, "/")
 		description := getInstrumentDescription(instrumentName, route)
 		category := getInstrumentCategory(instrumentName, route)
-		example := getInstrumentExample(path, route)
+		useCase := getInstrumentUseCase(instrumentName, route)
+		exampleActions := renderExampleActions(r.Host, path, getInstrumentExamples(path, route))
 
 		html += fmt.Sprintf(`
             <div class="col-md-6 col-lg-4 mb-3">
@@ -457,6 +475,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
                             %s <span class="badge bg-secondary">%s</span>
                         </h5>
                         <p class="card-text">%s</p>
+                        <p class="small mb-3"><strong>Use case:</strong> %s</p>
                         <div class="mb-2">
                             <small class="text-muted">
                                 📁 %s<br>
@@ -464,24 +483,25 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
                                 ⏱️ TTL: %ds
                             </small>
                         </div>
+                        <div class="mb-3">
+                            <small class="text-muted d-block mb-2">Example flows</small>
+                            %s
+                        </div>
                         <div class="d-flex flex-wrap gap-1">
-                            <a href="%s%s" class="btn btn-primary btn-sm" target="_blank">Try Example</a>
                             <a href="%s" class="btn btn-outline-primary btn-sm" target="_blank">Base URL</a>
-                            <button class="btn btn-outline-secondary btn-sm" onclick="copyUrl('%s%s')">Copy Example</button>
                         </div>
                     </div>
                 </div>
             </div>`,
-			instrumentName,
-			category,
-			description,
-			route.WASMFile,
+			htmlpkg.EscapeString(instrumentName),
+			htmlpkg.EscapeString(category),
+			htmlpkg.EscapeString(description),
+			htmlpkg.EscapeString(useCase),
+			htmlpkg.EscapeString(route.WASMFile),
 			route.Cache,
 			getTTL(route, s.cfg.CacheTTL),
-			path,
-			example,
-			path,
-			fmt.Sprintf("http://%s%s%s", r.Host, path, example),
+			exampleActions,
+			htmlpkg.EscapeString(buildExamplePath(path, "")),
 		)
 	}
 
@@ -499,10 +519,8 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
     </footer>
 
     <script>
-        function copyUrl(url) {
+        function copyUrl(url, button) {
             navigator.clipboard.writeText(url).then(() => {
-                // Show feedback
-                const button = event.target;
                 const originalText = button.textContent;
                 button.textContent = 'Copied!';
                 button.classList.remove('btn-outline-secondary');
@@ -1033,8 +1051,115 @@ func getInstrumentExample(path string, route Route) string {
 		return route.Example
 	}
 
-	// Generate basic example
-	return "?param=value"
+	return ""
+}
+
+func getInstrumentExamples(path string, route Route) []RouteExample {
+	examples := make([]RouteExample, 0, len(route.Examples)+1)
+	seen := make(map[string]struct{}, len(route.Examples)+1)
+
+	if route.Example != "" {
+		examples = append(examples, RouteExample{
+			Label: "Default example",
+			Query: route.Example,
+		})
+		seen[buildExamplePath(path, route.Example)] = struct{}{}
+	}
+
+	for _, example := range route.Examples {
+		if strings.TrimSpace(example.Query) == "" {
+			continue
+		}
+
+		normalizedPath := buildExamplePath(path, example.Query)
+		if _, exists := seen[normalizedPath]; exists {
+			continue
+		}
+
+		label := strings.TrimSpace(example.Label)
+		if label == "" {
+			label = "Example"
+		}
+		examples = append(examples, RouteExample{
+			Label: label,
+			Query: example.Query,
+		})
+		seen[normalizedPath] = struct{}{}
+	}
+
+	if len(examples) == 0 {
+		defaultQuery := getInstrumentExample(path, route)
+		defaultLabel := "Example"
+		if strings.TrimSpace(defaultQuery) == "" {
+			defaultLabel = "Base example"
+		}
+		examples = append(examples, RouteExample{
+			Label: defaultLabel,
+			Query: defaultQuery,
+		})
+	}
+
+	return examples
+}
+
+func getInstrumentUseCase(_ string, route Route) string {
+	if route.UseCase != "" {
+		return route.UseCase
+	}
+	return "General-purpose WebAssembly-backed endpoint"
+}
+
+func buildExamplePath(path, query string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return path
+	}
+	if strings.HasPrefix(trimmed, "?") {
+		return path + trimmed
+	}
+	return path + "?" + trimmed
+}
+
+func buildAbsoluteExampleURL(host, path, query string) string {
+	relativePath := buildExamplePath(path, query)
+	if strings.TrimSpace(host) == "" {
+		return relativePath
+	}
+	return fmt.Sprintf("http://%s%s", host, relativePath)
+}
+
+func renderExampleActions(host, path string, examples []RouteExample) string {
+	var builder strings.Builder
+
+	for _, example := range examples {
+		label := strings.TrimSpace(example.Label)
+		if label == "" {
+			label = "Example"
+		}
+		relativeURL := buildExamplePath(path, example.Query)
+		absoluteURL := buildAbsoluteExampleURL(host, path, example.Query)
+
+		builder.WriteString(fmt.Sprintf(`
+                            <div class="border rounded p-2 mb-2">
+                                <div class="d-flex justify-content-between align-items-start gap-2">
+                                    <div class="flex-grow-1">
+                                        <div class="fw-semibold">%s</div>
+                                        <code class="example-code">%s</code>
+                                    </div>
+                                    <div class="btn-group btn-group-sm">
+                                        <a href="%s" class="btn btn-primary" target="_blank">Open</a>
+                                        <button type="button" class="btn btn-outline-secondary" data-url="%s" onclick="copyUrl(this.dataset.url, this)">Copy</button>
+                                    </div>
+                                </div>
+                            </div>`,
+			htmlpkg.EscapeString(label),
+			htmlpkg.EscapeString(relativeURL),
+			htmlpkg.EscapeString(relativeURL),
+			htmlpkg.EscapeString(absoluteURL),
+		))
+	}
+
+	return builder.String()
 }
 
 func main() {

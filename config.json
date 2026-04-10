@@ -10,14 +10,22 @@
       "cache": false,
       "description": "Simple greeting service demonstrating basic WASM interaction and parameter passing",
       "category": "Basic",
-      "example": "?name=Alice"
+      "example": "?name=Alice",
+      "examples": [
+        {
+          "label": "Workshop intro",
+          "query": "?name=WASIO"
+        }
+      ],
+      "use_case": "Smoke-test routing, parameter passing, and request/response wiring."
     },
     "/random": {
       "wasm_file": "instruments/random_number.wasm",
       "cache": false,
       "description": "Generates random numbers using a seed-based approach for reproducible randomness",
       "category": "Basic",
-      "example": ""
+      "example": "",
+      "use_case": "Demo deterministic randomness and lightweight request handling."
     },
     "/fibonacci": {
       "wasm_file": "instruments/fibonacci.wasm",
@@ -25,7 +33,14 @@
       "ttl": 600,
       "description": "Computes Fibonacci numbers with response caching for performance optimization",
       "category": "Math",
-      "example": "?n=15"
+      "example": "?n=15",
+      "examples": [
+        {
+          "label": "Cache-heavy request",
+          "query": "?n=35"
+        }
+      ],
+      "use_case": "Show CPU-bound work, caching behaviour, and latency differences."
     },
     "/calculator": {
       "wasm_file": "instruments/calculator.wasm",
@@ -33,28 +48,60 @@
       "ttl": 300,
       "description": "Mathematical calculator supporting addition, subtraction, multiplication, division, power, and modulo operations",
       "category": "Math",
-      "example": "?op=add&a=15&b=25"
+      "example": "?op=add&a=15&b=25",
+      "examples": [
+        {
+          "label": "Power",
+          "query": "?op=pow&a=2&b=8"
+        },
+        {
+          "label": "Modulo",
+          "query": "?op=mod&a=29&b=5"
+        }
+      ],
+      "use_case": "Prototype calculation endpoints for quotes, forms, or simple business rules."
     },
     "/time_utils": {
       "wasm_file": "instruments/time_utils.wasm",
       "cache": false,
       "description": "Advanced time and date manipulation with timezone support, formatting, and calculations",
       "category": "Utils",
-      "example": "?op=add&duration=2h30m&tz=UTC"
+      "example": "?op=add&duration=2h30m&tz=UTC",
+      "examples": [
+        {
+          "label": "Countdown",
+          "query": "?op=diff&target=2030-01-01T00:00:00Z"
+        }
+      ],
+      "use_case": "Build scheduling helpers, timezone conversions, and deadline calculations."
     },
     "/text_utils": {
       "wasm_file": "instruments/text_utils.wasm",
       "cache": false,
       "description": "Comprehensive text processing including case conversion, analysis, pattern matching, and statistics",
       "category": "Utils",
-      "example": "?op=palindrome&text=racecar"
+      "example": "?op=palindrome&text=racecar",
+      "examples": [
+        {
+          "label": "Replace values",
+          "query": "?op=replace&text=blue%20car%20blue%20sky&old=blue&new=green"
+        }
+      ],
+      "use_case": "Support text cleanup, validation, and transformation workflows."
     },
     "/url_utils": {
       "wasm_file": "instruments/url_utils.wasm",
       "cache": false,
       "description": "URL encoding, decoding, parsing, validation, and component extraction utilities",
       "category": "Utils",
-      "example": "?op=parse&input=https://example.com/path?key=value"
+      "example": "?op=parse&input=https://example.com/path?key=value",
+      "examples": [
+        {
+          "label": "Join path",
+          "query": "?op=join&base=https://example.com/api/&input=../health"
+        }
+      ],
+      "use_case": "Inspect, normalize, and validate callback URLs or webhook targets."
     },
     "/hash_utils": {
       "wasm_file": "instruments/hash_utils.wasm",
@@ -62,7 +109,14 @@
       "ttl": 3600,
       "description": "Cryptographic hashing (MD5, SHA family) and encoding utilities (Base64, Hex)",
       "category": "Security",
-      "example": "?op=sha256&input=hello"
+      "example": "?op=sha256&input=hello",
+      "examples": [
+        {
+          "label": "Base64 encode",
+          "query": "?op=base64encode&input=demo-data"
+        }
+      ],
+      "use_case": "Generate checksums, fingerprints, or encoding conversions in HTTP workflows."
     },
     "/mandelbrot": {
       "wasm_file": "instruments/mandelbrot.wasm",
@@ -70,7 +124,8 @@
       "ttl": 0,
       "description": "Real-time Mandelbrot fractal generator with customizable parameters and PNG output",
       "category": "Graphics",
-      "example": "?cx=-0.5&cy=0&zoom=1&width=400&height=300"
+      "example": "?cx=-0.5&cy=0&zoom=1&width=400&height=300",
+      "use_case": "Demonstrate binary responses, visualization, and parameter-driven rendering."
     },
     "/process_file": {
       "wasm_file": "instruments/file_processor.wasm",
@@ -79,6 +134,7 @@
       "description": "File analysis and processing with controlled filesystem access patterns",
       "category": "File I/O",
       "example": "",
+      "use_case": "Validate explicit filesystem mounts for reporting or ingestion tasks.",
       "filesystem": {
         "mount": "/data",
         "path": "./data"
@@ -90,6 +146,7 @@
       "description": "Dynamic HTML profile generation using template rendering and parameter substitution",
       "category": "Web",
       "example": "?name=John&age=25&hobbies=reading,coding,hiking",
+      "use_case": "Show server-side HTML rendering for demos, landing pages, or onboarding flows.",
       "filesystem": {
         "mount": "/templates",
         "path": "./templates"
@@ -102,6 +159,13 @@
       "description": "Complete wiki system with CRUD operations, search, tagging, and responsive UI",
       "category": "Web",
       "example": "?page=home",
+      "examples": [
+        {
+          "label": "Search pages",
+          "query": "?search=welcome"
+        }
+      ],
+      "use_case": "Provide a lightweight content-management example with persisted filesystem state.",
       "filesystem": {
         "mount": "/wiki",
         "path": "./wiki"
@@ -113,6 +177,13 @@
       "description": "Real-time chat application with persistent message storage and responsive interface",
       "category": "Web",
       "example": "?action=ui",
+      "examples": [
+        {
+          "label": "Recent messages",
+          "query": "?action=get&n=10"
+        }
+      ],
+      "use_case": "Demonstrate interactive UI flows backed by persisted JSON data.",
       "filesystem": {
         "mount": "/chat",
         "path": "./chat"
