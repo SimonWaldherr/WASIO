@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	htmlpkg "html"
 	"io"
 	"io/ioutil"
 	"log"
@@ -29,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -126,6 +128,11 @@ func (s *ServerStats) GetStats() ServerStats {
 }
 
 // Route defines a single HTTP endpoint mapped to a WASM module.
+type RouteExample struct {
+	Label string `json:"label"`
+	Query string `json:"query"`
+}
+
 type Route struct {
 	// Path to the compiled WebAssembly module (WASI target).
 	WASMFile string `json:"wasm_file"`
@@ -143,12 +150,30 @@ type Route struct {
 	} `json:"filesystem"`
 
 	// Metadata for display and documentation
-	Description string `json:"description,omitempty"` // Human-readable description
-	Category    string `json:"category,omitempty"`    // Category for grouping (Basic, Math, etc.)
-	Example     string `json:"example,omitempty"`     // Example query parameters or usage
-	
+	Description string         `json:"description,omitempty"` // Human-readable description
+	Category    string         `json:"category,omitempty"`    // Category for grouping (Basic, Math, etc.)
+	Example     string         `json:"example,omitempty"`     // Example query parameters or usage
+	Examples    []RouteExample `json:"examples,omitempty"`    // Additional example queries shown on the index page
+	UseCase     string         `json:"use_case,omitempty"`    // Practical use case shown on the index page
+
 	// Configuration data passed to the WASM module
 	Config interface{} `json:"config,omitempty"` // Module-specific configuration
+
+	// Methods restricts this route to the listed HTTP methods (e.g. ["GET","POST"]).
+	// An empty slice allows all methods.
+	Methods []string `json:"methods,omitempty"`
+
+	// Env contains environment variables injected into the WASM module.
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// CORSConfig holds Cross-Origin Resource Sharing settings applied globally.
+type CORSConfig struct {
+	Enabled        bool     `json:"enabled"`
+	AllowedOrigins []string `json:"allowed_origins"` // "*" to allow all
+	AllowedMethods []string `json:"allowed_methods"`
+	AllowedHeaders []string `json:"allowed_headers"`
+	MaxAge         int      `json:"max_age"` // Preflight cache in seconds
 }
 
 // Config represents the server configuration loaded from JSON.
@@ -158,6 +183,7 @@ type Config struct {
 	CacheSize  int              `json:"cache_size"` // Max entries for both module & response cache
 	IndexPage  bool             `json:"index_page"` // Enable index page (default: true)
 	Monitoring bool             `json:"monitoring"` // Enable monitoring endpoint (default: true)
+	CORS       CORSConfig       `json:"cors"`       // Global CORS configuration
 	Routes     map[string]Route `json:"routes"`     // Map URL paths to Route settings
 }
 
@@ -194,11 +220,18 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// ModuleCache caches compiled WASM modules with simple LRU eviction.
+// cachedModule stores a compiled WASM module together with the file's
+// modification time at the moment of compilation, enabling hot-reload.
+type cachedModule struct {
+	mod     wazero.CompiledModule
+	modTime time.Time
+}
+
+// ModuleCache caches compiled WASM modules with mtime-based invalidation.
 type ModuleCache struct {
 	mu    sync.RWMutex
 	rt    wazero.Runtime
-	cache map[string]wazero.CompiledModule
+	cache map[string]cachedModule
 	size  int
 }
 
@@ -208,26 +241,55 @@ func NewModuleCache(ctx context.Context, size int) *ModuleCache {
 	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
 	return &ModuleCache{
 		rt:    rt,
-		cache: make(map[string]wazero.CompiledModule, size),
+		cache: make(map[string]cachedModule, size),
 		size:  size,
 	}
 }
 
+// Evict removes a single compiled module from the cache.
+func (m *ModuleCache) Evict(wasmPath string) {
+	m.mu.Lock()
+	delete(m.cache, wasmPath)
+	m.mu.Unlock()
+}
+
+// FlushAll empties the entire compiled-module cache.
+func (m *ModuleCache) FlushAll() {
+	m.mu.Lock()
+	m.cache = make(map[string]cachedModule, m.size)
+	m.mu.Unlock()
+}
+
 // Get returns a compiled module, compiling and caching it if needed.
-// Evicts one arbitrary entry when cache is full.
+// If the .wasm file on disk is newer than the cached version, the cache entry
+// is automatically invalidated and the module is recompiled (hot-reload).
 func (m *ModuleCache) Get(ctx context.Context, wasmPath string, stats *ServerStats) (wazero.CompiledModule, error) {
+	// Stat the file outside the lock to avoid holding it during I/O.
+	fileInfo, statErr := os.Stat(wasmPath)
+
 	m.mu.RLock()
-	if mod, ok := m.cache[wasmPath]; ok {
-		m.mu.RUnlock()
-		if stats != nil {
-			stats.IncrementModuleCacheHit()
-		}
-		return mod, nil
-	}
+	entry, ok := m.cache[wasmPath]
 	m.mu.RUnlock()
+
+	if ok {
+		// Invalidate when the file has been modified since compilation.
+		stale := statErr == nil && fileInfo.ModTime().After(entry.modTime)
+		if !stale {
+			if stats != nil {
+				stats.IncrementModuleCacheHit()
+			}
+			return entry.mod, nil
+		}
+		log.Printf("hot-reload: %s changed, recompiling", wasmPath)
+	}
 
 	if stats != nil {
 		stats.IncrementModuleCacheMiss()
+	}
+
+	var modTime time.Time
+	if statErr == nil {
+		modTime = fileInfo.ModTime()
 	}
 
 	wasmBytes, err := os.ReadFile(wasmPath)
@@ -248,7 +310,7 @@ func (m *ModuleCache) Get(ctx context.Context, wasmPath string, stats *ServerSta
 			break
 		}
 	}
-	m.cache[wasmPath] = mod
+	m.cache[wasmPath] = cachedModule{mod: mod, modTime: modTime}
 	return mod, nil
 }
 
@@ -271,6 +333,13 @@ func NewResponseCache(size int) *ResponseCache {
 		cache: make(map[string]cachedResponse, size),
 		size:  size,
 	}
+}
+
+// FlushAll empties the entire response cache.
+func (r *ResponseCache) FlushAll() {
+	r.mu.Lock()
+	r.cache = make(map[string]cachedResponse, r.size)
+	r.mu.Unlock()
 }
 
 // Get retrieves a cached response if present and not expired.
@@ -342,6 +411,279 @@ func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`OK`))
 }
 
+// reloadHandler flushes the compiled-module cache (and optionally the response
+// cache) without restarting the server.  Any subsequent request will recompile
+// WASM files from disk, picking up newly built .wasm binaries automatically.
+//
+//	GET /_reload          – flush module cache only
+//	GET /_reload?all=1    – flush module cache + response cache
+//	GET /_reload?route=/x – flush module cache entry for a single route
+func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
+	type result struct {
+		Flushed  []string `json:"flushed"`
+		RespCache bool    `json:"response_cache_flushed"`
+	}
+
+	q := r.URL.Query()
+	res := result{}
+
+	if routePath := q.Get("route"); routePath != "" {
+		// Targeted: evict one specific module
+		route, ok := s.cfg.Routes[routePath]
+		if !ok {
+			http.Error(w, "route not found", http.StatusNotFound)
+			return
+		}
+		s.modC.Evict(route.WASMFile)
+		res.Flushed = []string{route.WASMFile}
+		log.Printf("reload: evicted module cache for %s (%s)", routePath, route.WASMFile)
+	} else {
+		// Global: evict all compiled modules
+		paths := make([]string, 0, len(s.cfg.Routes))
+		for _, route := range s.cfg.Routes {
+			paths = append(paths, route.WASMFile)
+		}
+		s.modC.FlushAll()
+		res.Flushed = paths
+		log.Printf("reload: flushed all %d compiled module(s)", len(paths))
+	}
+
+	if q.Get("all") == "1" {
+		s.respC.FlushAll()
+		res.RespCache = true
+		log.Print("reload: flushed response cache")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
+// ── LLM native handlers ───────────────────────────────────────────────────────
+//
+// WASI preview1 has no socket support, so all outbound HTTP calls to the LLM
+// API (e.g. LM Studio / OpenAI-compatible endpoints) are handled here in the
+// WASIO host rather than inside the llm.wasm module.
+//
+// Configuration is read from the /llm route's "env" block in config.json:
+//   OPENAI_BASE_URL  – base URL of the OpenAI-compatible API
+//   OPENAI_API_KEY   – API key (e.g. "lm-studio" for LM Studio)
+//   OPENAI_MODEL     – default model name (empty = picked by server)
+//   OPENAI_SYSTEM    – system prompt shown to the model
+
+type llmSettings struct {
+	BaseURL      string
+	APIKey       string
+	Model        string
+	SystemPrompt string
+}
+
+func (s *Server) llmBaseConfig() llmSettings {
+	c := llmSettings{
+		BaseURL:      "http://localhost:1234/v1",
+		APIKey:       "lm-studio",
+		Model:        "",
+		SystemPrompt: "You are a helpful assistant.",
+	}
+	if route, ok := s.cfg.Routes["/llm"]; ok {
+		if v := route.Env["OPENAI_BASE_URL"]; v != "" {
+			c.BaseURL = v
+		}
+		if v := route.Env["OPENAI_API_KEY"]; v != "" {
+			c.APIKey = v
+		}
+		if v := route.Env["OPENAI_MODEL"]; v != "" {
+			c.Model = v
+		}
+		if v := route.Env["OPENAI_SYSTEM"]; v != "" {
+			c.SystemPrompt = v
+		}
+	}
+	return c
+}
+
+// newLLMClient returns a pre-configured HTTP client for LLM API calls.
+func newLLMClient() *http.Client {
+	return &http.Client{Timeout: 120 * time.Second}
+}
+
+// llmModelsHandler handles GET /_llm/models and proxies to {baseURL}/models.
+func (s *Server) llmModelsHandler(w http.ResponseWriter, r *http.Request) {
+	cfg := s.llmBaseConfig()
+	client := newLLMClient()
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, cfg.BaseURL+"/models", nil)
+	if err != nil {
+		http.Error(w, `{"error":"failed to build request"}`, http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, `{"error":"LLM API unreachable: %s"}`, strings.ReplaceAll(err.Error(), `"`, `'`))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read response"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
+}
+
+// llmChatHandler handles GET /_llm/chat and forwards to {baseURL}/chat/completions.
+//
+// Query parameters:
+//
+//	message    – the user's current message (required)
+//	system     – override system prompt (optional)
+//	model      – override model name (optional)
+//	temperature – float, default 0.7 (optional)
+//	max_tokens  – integer, default 2048 (optional)
+//	history    – JSON array of {"role":"user"|"assistant","content":"..."} (optional)
+func (s *Server) llmChatHandler(w http.ResponseWriter, r *http.Request) {
+	cfg := s.llmBaseConfig()
+	q := r.URL.Query()
+
+	message := q.Get("message")
+	if message == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"missing message parameter"}`)
+		return
+	}
+
+	systemPrompt := cfg.SystemPrompt
+	if s := q.Get("system"); s != "" {
+		systemPrompt = s
+	}
+	model := cfg.Model
+	if m := q.Get("model"); m != "" {
+		model = m
+	}
+	temperature := 0.7
+	if t := q.Get("temperature"); t != "" {
+		if parsed, err := fmt.Sscanf(t, "%f", &temperature); parsed != 1 || err != nil {
+			temperature = 0.7
+		}
+	}
+	maxTokens := 2048
+	if mt := q.Get("max_tokens"); mt != "" {
+		if parsed, err := fmt.Sscanf(mt, "%d", &maxTokens); parsed != 1 || err != nil {
+			maxTokens = 2048
+		}
+	}
+
+	type chatMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	messages := []chatMessage{{Role: "system", Content: systemPrompt}}
+
+	// Inject history if provided
+	if histJSON := q.Get("history"); histJSON != "" {
+		var history []chatMessage
+		if err := json.Unmarshal([]byte(histJSON), &history); err == nil {
+			messages = append(messages, history...)
+		}
+	}
+	messages = append(messages, chatMessage{Role: "user", Content: message})
+
+	type chatRequest struct {
+		Model       string        `json:"model,omitempty"`
+		Messages    []chatMessage `json:"messages"`
+		Temperature float64       `json:"temperature"`
+		MaxTokens   int           `json:"max_tokens"`
+	}
+
+	payload := chatRequest{
+		Model:       model,
+		Messages:    messages,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, `{"error":"failed to marshal request"}`, http.StatusInternalServerError)
+		return
+	}
+
+	client := newLLMClient()
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
+		cfg.BaseURL+"/chat/completions", bytes.NewReader(bodyBytes))
+	if err != nil {
+		http.Error(w, `{"error":"failed to build request"}`, http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, `{"error":"LLM API unreachable: %s"}`, strings.ReplaceAll(err.Error(), `"`, `'`))
+		return
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, `{"error":"failed to parse LLM API response"}`)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if apiResp.Error != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]string{"error": apiResp.Error.Message})
+		return
+	}
+
+	if len(apiResp.Choices) == 0 {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, `{"error":"no choices returned by LLM API"}`)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"content": apiResp.Choices[0].Message.Content,
+		"role":    apiResp.Choices[0].Message.Role,
+		"model":   apiResp.Model,
+		"usage":   apiResp.Usage,
+	})
+}
+
 // indexHandler serves the main index page with all active instruments.
 func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -358,6 +700,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
         .instrument-card:hover { transform: translateY(-2px); }
         .stats-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
         .stat-number { font-size: 2rem; font-weight: bold; }
+        .example-code { display: block; white-space: normal; word-break: break-all; }
     </style>
 </head>
 <body>
@@ -368,6 +711,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
             </a>
             <div class="navbar-nav ms-auto">
                 <a class="nav-link" href="/monitoring">📊 Monitoring</a>
+                <a class="nav-link" href="/_reload">🔄 Reload</a>
                 <a class="nav-link" href="/health">❤️ Health</a>
             </div>
         </div>
@@ -444,13 +788,21 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
         
         <div class="row">`
 
-	// List all available routes
-	for path, route := range s.cfg.Routes {
+	// List all available routes in a stable order
+	paths := make([]string, 0, len(s.cfg.Routes))
+	for path := range s.cfg.Routes {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		route := s.cfg.Routes[path]
 		// Try to determine instrument type and description
 		instrumentName := strings.TrimPrefix(path, "/")
 		description := getInstrumentDescription(instrumentName, route)
 		category := getInstrumentCategory(instrumentName, route)
-		example := getInstrumentExample(path, route)
+		useCase := getInstrumentUseCase(instrumentName, route)
+		exampleActions := renderExampleActions(r.Host, path, getInstrumentExamples(path, route))
 
 		html += fmt.Sprintf(`
             <div class="col-md-6 col-lg-4 mb-3">
@@ -460,6 +812,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
                             %s <span class="badge bg-secondary">%s</span>
                         </h5>
                         <p class="card-text">%s</p>
+                        <p class="small mb-3"><strong>Use case:</strong> %s</p>
                         <div class="mb-2">
                             <small class="text-muted">
                                 📁 %s<br>
@@ -467,24 +820,25 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
                                 ⏱️ TTL: %ds
                             </small>
                         </div>
+                        <div class="mb-3">
+                            <small class="text-muted d-block mb-2">Example flows</small>
+                            %s
+                        </div>
                         <div class="d-flex flex-wrap gap-1">
-                            <a href="%s%s" class="btn btn-primary btn-sm" target="_blank">Try Example</a>
                             <a href="%s" class="btn btn-outline-primary btn-sm" target="_blank">Base URL</a>
-                            <button class="btn btn-outline-secondary btn-sm" onclick="copyUrl('%s%s')">Copy Example</button>
                         </div>
                     </div>
                 </div>
             </div>`,
-			instrumentName,
-			category,
-			description,
-			route.WASMFile,
+			htmlpkg.EscapeString(instrumentName),
+			htmlpkg.EscapeString(category),
+			htmlpkg.EscapeString(description),
+			htmlpkg.EscapeString(useCase),
+			htmlpkg.EscapeString(route.WASMFile),
 			route.Cache,
 			getTTL(route, s.cfg.CacheTTL),
-			path,
-			example,
-			path,
-			fmt.Sprintf("http://%s%s%s", r.Host, path, example),
+			exampleActions,
+			htmlpkg.EscapeString(buildExamplePath(path, "")),
 		)
 	}
 
@@ -502,10 +856,8 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
     </footer>
 
     <script>
-        function copyUrl(url) {
+        function copyUrl(url, button) {
             navigator.clipboard.writeText(url).then(() => {
-                // Show feedback
-                const button = event.target;
                 const originalText = button.textContent;
                 button.textContent = 'Copied!';
                 button.classList.remove('btn-outline-secondary');
@@ -583,6 +935,7 @@ func (s *Server) monitoringHandler(w http.ResponseWriter, r *http.Request) {
             </a>
             <div class="navbar-nav ms-auto">
                 <a class="nav-link" href="/">🏠 Home</a>
+                <a class="nav-link" href="/_reload">🔄 Reload</a>
                 <a class="nav-link" href="/monitoring?format=json">📄 JSON</a>
             </div>
         </div>
@@ -833,6 +1186,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/health":
 		s.healthHandler(w, r)
 		return
+	case "/_reload":
+		s.reloadHandler(w, r)
+		return
+	case "/_llm/models":
+		s.llmModelsHandler(w, r)
+		return
+	case "/_llm/chat":
+		s.llmChatHandler(w, r)
+		return
 	case "/":
 		if s.cfg.IndexPage {
 			s.indexHandler(w, r)
@@ -856,6 +1218,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		success = false
 		http.NotFound(w, r)
 		return
+	}
+
+	// Enforce allowed HTTP methods when configured
+	if len(route.Methods) > 0 {
+		allowed := false
+		for _, m := range route.Methods {
+			if strings.EqualFold(m, r.Method) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			success = false
+			w.Header().Set("Allow", strings.Join(route.Methods, ", "))
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 	}
 
 	key := path + "?" + r.URL.RawQuery
@@ -910,6 +1289,11 @@ func (s *Server) runWASM(ctx context.Context, route *Route, stdin []byte, stdout
 		WithStdin(bytes.NewReader(stdin)).
 		WithStdout(stdout)
 
+	// Inject per-route environment variables into the WASM module
+	for k, v := range route.Env {
+		config = config.WithEnv(k, v)
+	}
+
 	if route.Filesystem.Mount != "" && route.Filesystem.Path != "" {
 		fsCfg := wazero.NewFSConfig().
 			WithDirMount(route.Filesystem.Path, route.Filesystem.Mount)
@@ -948,28 +1332,28 @@ func (s *Server) handleProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Build parameters for the proxy WASM module
 	params := make(map[string]string)
-	
+
 	// Add proxy configuration if available
 	if config, ok := proxyRoute.Config.(map[string]interface{}); ok {
 		if configBytes, err := json.Marshal(config); err == nil {
 			params["config"] = string(configBytes)
 		}
 	}
-	
+
 	// Add request details
 	params["op"] = "proxy"
 	params["path"] = proxyPath
 	params["method"] = r.Method
 	params["url"] = r.URL.String()
 	params["remote_addr"] = r.RemoteAddr
-	
+
 	// Add headers
 	for key, values := range r.Header {
 		if len(values) > 0 {
 			params["header_"+key] = values[0]
 		}
 	}
-	
+
 	// Add query parameters from original request
 	for k, vs := range r.URL.Query() {
 		if len(vs) > 0 {
@@ -1053,6 +1437,60 @@ func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
 	n, err := lrw.ResponseWriter.Write(b)
 	lrw.size += n
 	return n, err
+}
+
+// corsMiddleware applies CORS headers based on the server configuration.
+func corsMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
+	if !cfg.Enabled {
+		return next
+	}
+
+	allowedOrigins := cfg.AllowedOrigins
+	if len(allowedOrigins) == 0 {
+		allowedOrigins = []string{"*"}
+	}
+	allowedMethods := cfg.AllowedMethods
+	if len(allowedMethods) == 0 {
+		allowedMethods = []string{"GET", "POST", "OPTIONS"}
+	}
+	allowedHeaders := cfg.AllowedHeaders
+	if len(allowedHeaders) == 0 {
+		allowedHeaders = []string{"Content-Type", "Authorization"}
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+
+		// Determine whether to reflect the origin or use a wildcard
+		allowOrigin := ""
+		for _, o := range allowedOrigins {
+			if o == "*" {
+				allowOrigin = "*"
+				break
+			}
+			if o == origin {
+				allowOrigin = origin
+				break
+			}
+		}
+
+		if allowOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+			w.Header().Set("Access-Control-Allow-Methods", strings.Join(allowedMethods, ", "))
+			w.Header().Set("Access-Control-Allow-Headers", strings.Join(allowedHeaders, ", "))
+			if cfg.MaxAge > 0 {
+				w.Header().Set("Access-Control-Max-Age", fmt.Sprintf("%d", cfg.MaxAge))
+			}
+		}
+
+		// Short-circuit preflight requests
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // logMiddleware logs each HTTP request in Apache combined log format.
@@ -1145,8 +1583,115 @@ func getInstrumentExample(path string, route Route) string {
 		return route.Example
 	}
 
-	// Generate basic example
-	return "?param=value"
+	return ""
+}
+
+func getInstrumentExamples(path string, route Route) []RouteExample {
+	examples := make([]RouteExample, 0, len(route.Examples)+1)
+	seen := make(map[string]struct{}, len(route.Examples)+1)
+
+	if route.Example != "" {
+		examples = append(examples, RouteExample{
+			Label: "Default example",
+			Query: route.Example,
+		})
+		seen[buildExamplePath(path, route.Example)] = struct{}{}
+	}
+
+	for _, example := range route.Examples {
+		if strings.TrimSpace(example.Query) == "" {
+			continue
+		}
+
+		normalizedPath := buildExamplePath(path, example.Query)
+		if _, exists := seen[normalizedPath]; exists {
+			continue
+		}
+
+		label := strings.TrimSpace(example.Label)
+		if label == "" {
+			label = "Example"
+		}
+		examples = append(examples, RouteExample{
+			Label: label,
+			Query: example.Query,
+		})
+		seen[normalizedPath] = struct{}{}
+	}
+
+	if len(examples) == 0 {
+		defaultQuery := getInstrumentExample(path, route)
+		defaultLabel := "Example"
+		if strings.TrimSpace(defaultQuery) == "" {
+			defaultLabel = "Base example"
+		}
+		examples = append(examples, RouteExample{
+			Label: defaultLabel,
+			Query: defaultQuery,
+		})
+	}
+
+	return examples
+}
+
+func getInstrumentUseCase(_ string, route Route) string {
+	if route.UseCase != "" {
+		return route.UseCase
+	}
+	return "General-purpose WebAssembly-backed endpoint"
+}
+
+func buildExamplePath(path, query string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return path
+	}
+	if strings.HasPrefix(trimmed, "?") {
+		return path + trimmed
+	}
+	return path + "?" + trimmed
+}
+
+func buildAbsoluteExampleURL(host, path, query string) string {
+	relativePath := buildExamplePath(path, query)
+	if strings.TrimSpace(host) == "" {
+		return relativePath
+	}
+	return fmt.Sprintf("http://%s%s", host, relativePath)
+}
+
+func renderExampleActions(host, path string, examples []RouteExample) string {
+	var builder strings.Builder
+
+	for _, example := range examples {
+		label := strings.TrimSpace(example.Label)
+		if label == "" {
+			label = "Example"
+		}
+		relativeURL := buildExamplePath(path, example.Query)
+		absoluteURL := buildAbsoluteExampleURL(host, path, example.Query)
+
+		builder.WriteString(fmt.Sprintf(`
+                            <div class="border rounded p-2 mb-2">
+                                <div class="d-flex justify-content-between align-items-start gap-2">
+                                    <div class="flex-grow-1">
+                                        <div class="fw-semibold">%s</div>
+                                        <code class="example-code">%s</code>
+                                    </div>
+                                    <div class="btn-group btn-group-sm">
+                                        <a href="%s" class="btn btn-primary" target="_blank">Open</a>
+                                        <button type="button" class="btn btn-outline-secondary" data-url="%s" onclick="copyUrl(this.dataset.url, this)">Copy</button>
+                                    </div>
+                                </div>
+                            </div>`,
+			htmlpkg.EscapeString(label),
+			htmlpkg.EscapeString(relativeURL),
+			htmlpkg.EscapeString(relativeURL),
+			htmlpkg.EscapeString(absoluteURL),
+		))
+	}
+
+	return builder.String()
 }
 
 func main() {
@@ -1162,8 +1707,8 @@ func main() {
 	// Initialize server
 	server := NewServer(cfg)
 
-	// Wrap with logging middleware
-	handler := logMiddleware(server)
+	// Wrap with logging and CORS middleware
+	handler := logMiddleware(corsMiddleware(cfg.CORS, server))
 
 	// HTTP server with graceful shutdown
 	httpSrv := &http.Server{

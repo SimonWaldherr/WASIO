@@ -19,27 +19,27 @@ import (
 // ProxyConfig represents the complete proxy configuration
 type ProxyConfig struct {
 	// Global settings
-	Timeout         int    `json:"timeout" yaml:"timeout"`                 // Request timeout in seconds
-	MaxIdleConns    int    `json:"max_idle_conns" yaml:"max_idle_conns"`   // Max idle connections
-	MaxConnsPerHost int    `json:"max_conns_per_host" yaml:"max_conns_per_host"` // Max connections per host
-	KeepAlive       int    `json:"keep_alive" yaml:"keep_alive"`           // Keep-alive timeout in seconds
-	EnableHTTP2     bool   `json:"enable_http2" yaml:"enable_http2"`       // Enable HTTP/2
-	
+	Timeout         int  `json:"timeout" yaml:"timeout"`                       // Request timeout in seconds
+	MaxIdleConns    int  `json:"max_idle_conns" yaml:"max_idle_conns"`         // Max idle connections
+	MaxConnsPerHost int  `json:"max_conns_per_host" yaml:"max_conns_per_host"` // Max connections per host
+	KeepAlive       int  `json:"keep_alive" yaml:"keep_alive"`                 // Keep-alive timeout in seconds
+	EnableHTTP2     bool `json:"enable_http2" yaml:"enable_http2"`             // Enable HTTP/2
+
 	// TLS settings
 	TLS TLSConfig `json:"tls" yaml:"tls"`
-	
+
 	// Route definitions
 	Routes []Route `json:"routes" yaml:"routes"`
-	
+
 	// Default route when no matches found
 	DefaultTarget string `json:"default_target" yaml:"default_target"`
-	
+
 	// Logging configuration
 	Logging LoggingConfig `json:"logging" yaml:"logging"`
-	
+
 	// Rate limiting
 	RateLimit RateLimitConfig `json:"rate_limit" yaml:"rate_limit"`
-	
+
 	// Health check configuration
 	HealthCheck HealthCheckConfig `json:"health_check" yaml:"health_check"`
 }
@@ -53,15 +53,15 @@ type TLSConfig struct {
 
 // Route represents a single routing rule
 type Route struct {
-	Name        string            `json:"name" yaml:"name"`
-	Priority    int               `json:"priority" yaml:"priority"` // Higher priority routes are checked first
-	Conditions  []Condition       `json:"conditions" yaml:"conditions"`
-	Target      string            `json:"target" yaml:"target"`
-	Transforms  []Transform       `json:"transforms" yaml:"transforms"`
-	Headers     map[string]string `json:"headers" yaml:"headers"` // Headers to add/modify
-	RemoveHeaders []string        `json:"remove_headers" yaml:"remove_headers"` // Headers to remove
-	Timeout     int               `json:"timeout" yaml:"timeout"` // Override global timeout
-	Enabled     bool              `json:"enabled" yaml:"enabled"`
+	Name          string            `json:"name" yaml:"name"`
+	Priority      int               `json:"priority" yaml:"priority"` // Higher priority routes are checked first
+	Conditions    []Condition       `json:"conditions" yaml:"conditions"`
+	Target        string            `json:"target" yaml:"target"`
+	Transforms    []Transform       `json:"transforms" yaml:"transforms"`
+	Headers       map[string]string `json:"headers" yaml:"headers"`               // Headers to add/modify
+	RemoveHeaders []string          `json:"remove_headers" yaml:"remove_headers"` // Headers to remove
+	Timeout       int               `json:"timeout" yaml:"timeout"`               // Override global timeout
+	Enabled       bool              `json:"enabled" yaml:"enabled"`
 }
 
 // Condition represents a matching condition
@@ -69,8 +69,8 @@ type Condition struct {
 	Type    string `json:"type" yaml:"type"`       // domain, port, path, header, query, method, ip
 	Pattern string `json:"pattern" yaml:"pattern"` // RegExp pattern or exact match
 	IsRegex bool   `json:"is_regex" yaml:"is_regex"`
-	Negate  bool   `json:"negate" yaml:"negate"`   // Invert the condition
-	Key     string `json:"key" yaml:"key"`         // For header/query conditions
+	Negate  bool   `json:"negate" yaml:"negate"` // Invert the condition
+	Key     string `json:"key" yaml:"key"`       // For header/query conditions
 }
 
 // Transform represents a URL/path transformation
@@ -90,9 +90,9 @@ type LoggingConfig struct {
 
 // RateLimitConfig represents rate limiting configuration
 type RateLimitConfig struct {
-	Enabled    bool `json:"enabled" yaml:"enabled"`
-	RequestsPerMinute int `json:"requests_per_minute" yaml:"requests_per_minute"`
-	BurstSize  int  `json:"burst_size" yaml:"burst_size"`
+	Enabled           bool `json:"enabled" yaml:"enabled"`
+	RequestsPerMinute int  `json:"requests_per_minute" yaml:"requests_per_minute"`
+	BurstSize         int  `json:"burst_size" yaml:"burst_size"`
 }
 
 // HealthCheckConfig represents health check configuration
@@ -280,7 +280,7 @@ func handleHealthCheck(params map[string]string) {
 
 	// Perform health checks on all targets
 	results := make(map[string]interface{})
-	
+
 	// Check all route targets
 	targets := make(map[string]bool)
 	for _, route := range config.Routes {

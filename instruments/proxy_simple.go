@@ -16,10 +16,10 @@ import (
 
 // SimpleProxyConfig represents a simple proxy configuration
 type SimpleProxyConfig struct {
-	Routes     map[string]string `json:"routes" yaml:"routes"`         // path -> target URL mapping
-	Timeout    int               `json:"timeout" yaml:"timeout"`       // Request timeout in seconds
-	StripPath  bool              `json:"strip_path" yaml:"strip_path"` // Remove proxy path from target URL
-	BasePath   string            `json:"base_path" yaml:"base_path"`   // Base path for proxy (e.g., "/proxy")
+	Routes    map[string]string `json:"routes" yaml:"routes"`         // path -> target URL mapping
+	Timeout   int               `json:"timeout" yaml:"timeout"`       // Request timeout in seconds
+	StripPath bool              `json:"strip_path" yaml:"strip_path"` // Remove proxy path from target URL
+	BasePath  string            `json:"base_path" yaml:"base_path"`   // Base path for proxy (e.g., "/proxy")
 }
 
 // ProxyResponse represents the response from proxying
@@ -204,11 +204,11 @@ func handleRouteTest(params map[string]string) {
 	}
 
 	response := map[string]interface{}{
-		"success":      true,
-		"path":         testPath,
+		"success":       true,
+		"path":          testPath,
 		"matched_route": route,
-		"target":       target,
-		"final_target": finalTarget,
+		"target":        target,
+		"final_target":  finalTarget,
 	}
 
 	printJSON(response)
@@ -312,7 +312,7 @@ func buildTargetURL(config *SimpleProxyConfig, target, requestPath, matchedRoute
 			remainingPath = strings.TrimPrefix(remainingPath, matchedRoute)
 			remainingPath = strings.TrimPrefix(remainingPath, "/")
 		}
-		
+
 		if remainingPath != "" {
 			targetURL.Path = strings.TrimSuffix(targetURL.Path, "/") + "/" + remainingPath
 		}
@@ -417,7 +417,7 @@ func checkTargetHealth(target string) string {
 	if strings.Contains(target, "heise.de") || strings.Contains(target, "google.com") {
 		return "simulated_healthy"
 	}
-	
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}

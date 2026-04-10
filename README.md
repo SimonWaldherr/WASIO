@@ -2,6 +2,8 @@
 
 [![DOI](https://zenodo.org/badge/884922110.svg)](https://doi.org/10.5281/zenodo.15257309)  
 
+[![Watch the video](https://img.youtube.com/vi/5B7Q5rJZhc0/maxresdefault.jpg)](https://youtu.be/5B7Q5rJZhc0)
+
 WASIO (WebAssembly System Interface Orchestrator) is a comprehensive Go-based server for dynamically loading, executing, and managing WebAssembly (WASM) instruments in response to HTTP requests. WASIO demonstrates the power of WebAssembly for creating isolated, efficient, and secure compute environments through a rich collection of example applications.
 
 The project serves as both a production-ready server framework and an educational platform showcasing various WebAssembly use cases, from simple calculations to complex applications like wikis and chat systems.

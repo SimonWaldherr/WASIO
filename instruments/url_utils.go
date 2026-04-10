@@ -47,18 +47,18 @@ func main() {
 			fmt.Printf("Error parsing URL: %v\n", err)
 			return
 		}
-		
+
 		fmt.Printf("URL components:\n")
 		fmt.Printf("  Scheme: %s\n", u.Scheme)
 		fmt.Printf("  Host: %s\n", u.Host)
 		fmt.Printf("  Path: %s\n", u.Path)
 		fmt.Printf("  Query: %s\n", u.RawQuery)
 		fmt.Printf("  Fragment: %s\n", u.Fragment)
-		
+
 		if u.User != nil {
 			fmt.Printf("  User: %s\n", u.User.Username())
 		}
-		
+
 		if u.RawQuery != "" {
 			values, err := url.ParseQuery(u.RawQuery)
 			if err == nil {
@@ -77,20 +77,20 @@ func main() {
 			fmt.Printf("Invalid URL: %v\n", err)
 			return
 		}
-		
+
 		isValid := true
 		issues := []string{}
-		
+
 		if u.Scheme == "" {
 			issues = append(issues, "missing scheme")
 			isValid = false
 		}
-		
+
 		if u.Host == "" && (u.Scheme == "http" || u.Scheme == "https") {
 			issues = append(issues, "missing host for http/https URL")
 			isValid = false
 		}
-		
+
 		if isValid {
 			fmt.Printf("Valid URL: %s\n", input)
 		} else {
@@ -103,19 +103,19 @@ func main() {
 			fmt.Println("Error: base parameter required for join operation")
 			return
 		}
-		
+
 		baseURL, err := url.Parse(base)
 		if err != nil {
 			fmt.Printf("Error parsing base URL: %v\n", err)
 			return
 		}
-		
+
 		relativeURL, err := url.Parse(input)
 		if err != nil {
 			fmt.Printf("Error parsing relative URL: %v\n", err)
 			return
 		}
-		
+
 		joined := baseURL.ResolveReference(relativeURL)
 		fmt.Printf("Joined URL: %s\n", joined.String())
 

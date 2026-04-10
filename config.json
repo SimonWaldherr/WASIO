@@ -10,14 +10,40 @@
       "cache": false,
       "description": "Simple greeting service demonstrating basic WASM interaction and parameter passing",
       "category": "Basic",
-      "example": "?name=Alice"
+      "example": "?name=Alice",
+      "examples": [
+        {
+          "label": "Greet WASIO",
+          "query": "?name=WASIO"
+        },
+        {
+          "label": "No name (default)",
+          "query": ""
+        }
+      ],
+      "use_case": "Smoke-test routing, parameter passing, and request/response wiring."
     },
     "/random": {
       "wasm_file": "instruments/random_number.wasm",
       "cache": false,
-      "description": "Generates random numbers using a seed-based approach for reproducible randomness",
+      "description": "Generates random numbers in a configurable range; each request uses a fresh server-side seed",
       "category": "Basic",
-      "example": ""
+      "example": "",
+      "examples": [
+        {
+          "label": "Custom range (1–6, dice)",
+          "query": "?min=1&max=7"
+        },
+        {
+          "label": "Five random numbers (0–100)",
+          "query": "?n=5"
+        },
+        {
+          "label": "Ten numbers (1–1000)",
+          "query": "?min=1&max=1000&n=10"
+        }
+      ],
+      "use_case": "Prototype lottery draws, test-data generation, or random sampling endpoints."
     },
     "/fibonacci": {
       "wasm_file": "instruments/fibonacci.wasm",
@@ -25,7 +51,22 @@
       "ttl": 600,
       "description": "Computes Fibonacci numbers with response caching for performance optimization",
       "category": "Math",
-      "example": "?n=15"
+      "example": "?n=10",
+      "examples": [
+        {
+          "label": "Small (n=15)",
+          "query": "?n=15"
+        },
+        {
+          "label": "Cached heavy (n=35)",
+          "query": "?n=35"
+        },
+        {
+          "label": "Max practical (n=42)",
+          "query": "?n=42"
+        }
+      ],
+      "use_case": "Show CPU-bound work, caching behaviour, and first-hit vs cache-hit latency differences."
     },
     "/calculator": {
       "wasm_file": "instruments/calculator.wasm",
@@ -33,28 +74,116 @@
       "ttl": 300,
       "description": "Mathematical calculator supporting addition, subtraction, multiplication, division, power, and modulo operations",
       "category": "Math",
-      "example": "?op=add&a=15&b=25"
+      "example": "?op=add&a=15&b=25",
+      "examples": [
+        {
+          "label": "Subtract",
+          "query": "?op=sub&a=100&b=37"
+        },
+        {
+          "label": "Multiply",
+          "query": "?op=mul&a=12&b=12"
+        },
+        {
+          "label": "Divide",
+          "query": "?op=div&a=355&b=113"
+        },
+        {
+          "label": "Power (2^10)",
+          "query": "?op=pow&a=2&b=10"
+        },
+        {
+          "label": "Modulo",
+          "query": "?op=mod&a=29&b=5"
+        }
+      ],
+      "use_case": "Prototype calculation endpoints for quotes, pricing forms, or simple business rules."
     },
     "/time_utils": {
       "wasm_file": "instruments/time_utils.wasm",
       "cache": false,
       "description": "Advanced time and date manipulation with timezone support, formatting, and calculations",
       "category": "Utils",
-      "example": "?op=add&duration=2h30m&tz=UTC"
+      "example": "?op=iso",
+      "examples": [
+        {
+          "label": "Unix timestamp",
+          "query": "?op=unix"
+        },
+        {
+          "label": "Current weekday",
+          "query": "?op=weekday"
+        },
+        {
+          "label": "Add 48h to now",
+          "query": "?op=add&duration=48h&tz=UTC"
+        },
+        {
+          "label": "Countdown to 2030",
+          "query": "?op=diff&target=2030-01-01T00:00:00Z"
+        },
+        {
+          "label": "Tokyo time",
+          "query": "?op=iso&tz=Asia/Tokyo"
+        }
+      ],
+      "use_case": "Build scheduling helpers, timezone converters, and deadline calculators."
     },
     "/text_utils": {
       "wasm_file": "instruments/text_utils.wasm",
       "cache": false,
       "description": "Comprehensive text processing including case conversion, analysis, pattern matching, and statistics",
       "category": "Utils",
-      "example": "?op=palindrome&text=racecar"
+      "example": "?op=upper&text=hello+world",
+      "examples": [
+        {
+          "label": "Reverse",
+          "query": "?op=reverse&text=WebAssembly"
+        },
+        {
+          "label": "Word count",
+          "query": "?op=words&text=the+quick+brown+fox+jumps+over+the+lazy+dog"
+        },
+        {
+          "label": "Palindrome check",
+          "query": "?op=palindrome&text=racecar"
+        },
+        {
+          "label": "Replace",
+          "query": "?op=replace&text=blue+car+blue+sky&old=blue&new=green"
+        },
+        {
+          "label": "CSV split",
+          "query": "?op=split&text=a,b,c,d,e&delimiter=,"
+        }
+      ],
+      "use_case": "Support text cleanup, content validation, and transformation workflows."
     },
     "/url_utils": {
       "wasm_file": "instruments/url_utils.wasm",
       "cache": false,
       "description": "URL encoding, decoding, parsing, validation, and component extraction utilities",
       "category": "Utils",
-      "example": "?op=parse&input=https://example.com/path?key=value"
+      "example": "?op=parse&input=https://example.com/path?key=value",
+      "examples": [
+        {
+          "label": "Encode",
+          "query": "?op=encode&input=hello world & more"
+        },
+        {
+          "label": "Decode",
+          "query": "?op=decode&input=hello+world+%26+more"
+        },
+        {
+          "label": "Validate URL",
+          "query": "?op=validate&input=https://github.com/tetratelabs/wazero"
+        },
+        {
+          "label": "Join path",
+          "query": "?op=join&base=https://example.com/api/v1/&input=../health"
+        }
+      ],
+      "use_case": "Inspect, normalize, and validate callback URLs or webhook targets."
     },
     "/hash_utils": {
       "wasm_file": "instruments/hash_utils.wasm",
@@ -62,15 +191,57 @@
       "ttl": 3600,
       "description": "Cryptographic hashing (MD5, SHA family) and encoding utilities (Base64, Hex)",
       "category": "Security",
-      "example": "?op=sha256&input=hello"
+      "example": "?op=sha256&input=hello",
+      "examples": [
+        {
+          "label": "MD5",
+          "query": "?op=md5&input=hello+world"
+        },
+        {
+          "label": "SHA-512",
+          "query": "?op=sha512&input=secret-payload"
+        },
+        {
+          "label": "Base64 encode",
+          "query": "?op=base64encode&input=wasio:demo"
+        },
+        {
+          "label": "Base64 decode",
+          "query": "?op=base64decode&input=d2FzaW86ZGVtbw=="
+        },
+        {
+          "label": "Hex encode",
+          "query": "?op=hexencode&input=binary-data"
+        }
+      ],
+      "use_case": "Generate checksums, fingerprints, or encoding conversions in HTTP pipelines."
     },
     "/mandelbrot": {
       "wasm_file": "instruments/mandelbrot.wasm",
-      "cache": false,
-      "ttl": 0,
+      "cache": true,
+      "ttl": 3600,
       "description": "Real-time Mandelbrot fractal generator with customizable parameters and PNG output",
       "category": "Graphics",
-      "example": "?cx=-0.5&cy=0&zoom=1&width=400&height=300"
+      "example": "?cx=-0.5&cy=0&zoom=1&width=400&height=300",
+      "examples": [
+        {
+          "label": "Seahorse valley",
+          "query": "?cx=-0.743&cy=0.127&zoom=80&width=400&height=300"
+        },
+        {
+          "label": "Elephant valley",
+          "query": "?cx=0.3&cy=0&zoom=6&width=400&height=300"
+        },
+        {
+          "label": "Deep zoom",
+          "query": "?cx=-0.7269&cy=0.1889&zoom=200&width=600&height=400&max_iter=500"
+        },
+        {
+          "label": "Full set (small)",
+          "query": "?cx=-0.5&cy=0&zoom=1&width=320&height=240"
+        }
+      ],
+      "use_case": "Demonstrate binary (PNG) responses, visualization, and CPU-intensive parameter-driven rendering."
     },
     "/process_file": {
       "wasm_file": "instruments/file_processor.wasm",
@@ -78,7 +249,14 @@
       "ttl": 120,
       "description": "File analysis and processing with controlled filesystem access patterns",
       "category": "File I/O",
-      "example": "",
+      "example": "?file=input.txt",
+      "examples": [
+        {
+          "label": "Read input file",
+          "query": "?file=input.txt"
+        }
+      ],
+      "use_case": "Validate explicit filesystem mounts for reporting or data ingestion tasks.",
       "filesystem": {
         "mount": "/data",
         "path": "./data"
@@ -90,6 +268,17 @@
       "description": "Dynamic HTML profile generation using template rendering and parameter substitution",
       "category": "Web",
       "example": "?name=John&age=25&hobbies=reading,coding,hiking",
+      "examples": [
+        {
+          "label": "Developer profile",
+          "query": "?name=Ada&age=36&hobbies=compilers,chess,sailing"
+        },
+        {
+          "label": "Minimal profile",
+          "query": "?name=Bob"
+        }
+      ],
+      "use_case": "Show server-side HTML rendering for demos, landing pages, or onboarding flows.",
       "filesystem": {
         "mount": "/templates",
         "path": "./templates"
@@ -102,6 +291,17 @@
       "description": "Complete wiki system with CRUD operations, search, tagging, and responsive UI",
       "category": "Web",
       "example": "?page=home",
+      "examples": [
+        {
+          "label": "About page",
+          "query": "?page=about"
+        },
+        {
+          "label": "Search",
+          "query": "?search=welcome"
+        }
+      ],
+      "use_case": "Provide a lightweight content-management example with persisted filesystem state.",
       "filesystem": {
         "mount": "/wiki",
         "path": "./wiki"
@@ -113,17 +313,191 @@
       "description": "Real-time chat application with persistent message storage and responsive interface",
       "category": "Web",
       "example": "?action=ui",
+      "examples": [
+        {
+          "label": "Last 5 messages (JSON)",
+          "query": "?action=get&n=5"
+        },
+        {
+          "label": "Post a message",
+          "query": "?action=post&user=WASIO&msg=Hello+from+WASM"
+        }
+      ],
+      "use_case": "Demonstrate interactive UI flows and POST-style state mutations backed by persisted JSON data.",
       "filesystem": {
         "mount": "/chat",
         "path": "./chat"
       }
     },
-    "/proxy": {
-      "wasm_file": "instruments/proxy.wasm",
+    "/llm": {
+      "wasm_file": "instruments/llm.wasm",
       "cache": false,
-      "description": "Simple path-based HTTP proxy - define routes in config to proxy /proxy/foobar to target URLs",
+      "description": "OpenAI-compatible LLM chat – talks to LM Studio, llmster, or the OpenAI API and provides a full chat interface",
+      "category": "AI",
+      "example": "?op=ui",
+      "examples": [
+        {
+          "label": "Chat UI",
+          "query": "?op=ui"
+        },
+        {
+          "label": "Single message (native API)",
+          "query": "/_llm/chat?message=What+is+WebAssembly%3F"
+        },
+        {
+          "label": "List models (native API)",
+          "query": "/_llm/models"
+        },
+        {
+          "label": "Custom temperature",
+          "query": "/_llm/chat?message=Tell+me+a+joke&temperature=1.2&max_tokens=256"
+        }
+      ],
+      "use_case": "Embed a private LLM endpoint into any WASIO deployment – point it at LM Studio for local inference or swap the base URL for OpenAI/Anthropic-compatible APIs.",
+      "env": {
+        "OPENAI_BASE_URL": "http://localhost:1234/v1",
+        "OPENAI_API_KEY":  "lm-studio",
+        "OPENAI_MODEL":    "",
+        "OPENAI_SYSTEM":   "You are a helpful assistant."
+      }
+    },
+    "/stats_utils": {
+      "wasm_file": "instruments/stats_utils.wasm",
+      "cache": false,
+      "description": "Descriptive statistics for comma-separated numbers: mean, median, mode, stddev, variance, percentiles",
+      "category": "Math",
+      "example": "?op=summary&data=4,8,15,16,23,42",
+      "examples": [
+        {
+          "label": "Mean",
+          "query": "?op=mean&data=10,20,30,40,50"
+        },
+        {
+          "label": "Median",
+          "query": "?op=median&data=3,1,4,1,5,9,2,6"
+        },
+        {
+          "label": "Mode",
+          "query": "?op=mode&data=1,2,2,3,3,3,4"
+        },
+        {
+          "label": "Standard deviation",
+          "query": "?op=stddev&data=2,4,4,4,5,5,7,9"
+        },
+        {
+          "label": "90th percentile",
+          "query": "?op=percentile&p=90&data=1,2,3,4,5,6,7,8,9,10"
+        }
+      ],
+      "use_case": "Analyse metric samples, benchmark results, or survey responses directly in an HTTP pipeline."
+    },
+    "/ip_utils": {
+      "wasm_file": "instruments/ip_utils.wasm",
+      "cache": false,
+      "description": "IP address utilities: info, private/public detection, CIDR subnet analysis, and address range expansion",
       "category": "Network",
-      "example": "?op=config&format=json",
+      "example": "?op=info&input=8.8.8.8",
+      "examples": [
+        {
+          "label": "Private address info",
+          "query": "?op=info&input=192.168.1.1"
+        },
+        {
+          "label": "Validate IPv6",
+          "query": "?op=validate&input=2001:db8::1"
+        },
+        {
+          "label": "CIDR breakdown",
+          "query": "?op=cidr&input=10.0.0.0/24"
+        },
+        {
+          "label": "CIDR + membership check",
+          "query": "?op=cidr&input=192.168.0.0/16&check=192.168.42.7"
+        },
+        {
+          "label": "Address range",
+          "query": "?op=range&start=10.0.0.1&end=10.0.0.12"
+        }
+      ],
+      "use_case": "Validate, inspect, and subnet-plan IP addresses in network automation or access-control workflows."
+    },
+    "/json_utils": {
+      "wasm_file": "instruments/json_utils.wasm",
+      "cache": false,
+      "description": "JSON formatting, minification, validation, key extraction, and structure statistics",
+      "category": "Utils",
+      "example": "?op=validate&input={\"hello\":\"world\"}",
+      "examples": [
+        {
+          "label": "Pretty-print",
+          "query": "?op=format&input={\"name\":\"WASIO\",\"version\":1,\"active\":true}"
+        },
+        {
+          "label": "Minify",
+          "query": "?op=minify&input={\"name\":\"WASIO\",  \"version\":  1}"
+        },
+        {
+          "label": "List keys",
+          "query": "?op=keys&input={\"host\":\"localhost\",\"port\":8080,\"debug\":false}"
+        },
+        {
+          "label": "Get value by key",
+          "query": "?op=get&key=port&input={\"host\":\"localhost\",\"port\":8080}"
+        },
+        {
+          "label": "Structure stats",
+          "query": "?op=stats&input={\"a\":[1,2,3],\"b\":{\"c\":4,\"d\":[5,6]}}"
+        }
+      ],
+      "use_case": "Validate, inspect, and transform JSON payloads inline without external tooling."
+    },
+    "/uuid": {
+      "wasm_file": "instruments/uuid.wasm",
+      "cache": false,
+      "description": "RFC 4122 v4 UUID generation and validation; each request uses a fresh server-side seed",
+      "category": "Utils",
+      "example": "",
+      "examples": [
+        {
+          "label": "Single UUID",
+          "query": ""
+        },
+        {
+          "label": "Five UUIDs",
+          "query": "?n=5"
+        },
+        {
+          "label": "Bulk (JSON array, 20)",
+          "query": "?op=bulk&n=20"
+        },
+        {
+          "label": "Validate a UUID",
+          "query": "?op=validate&input=550e8400-e29b-41d4-a716-446655440000"
+        }
+      ],
+      "use_case": "Mint unique identifiers for records, idempotency keys, or session tokens."
+    },
+    "/proxy": {
+      "wasm_file": "instruments/proxy_simple.wasm",
+      "cache": false,
+      "description": "Simple path-based HTTP proxy - define named routes in config, then hit /proxy/{name} to forward the request",
+      "category": "Network",
+      "example": "?op=routes",
+      "examples": [
+        {
+          "label": "List configured routes",
+          "query": "?op=routes"
+        },
+        {
+          "label": "Show example config (JSON)",
+          "query": "?op=config&format=json"
+        },
+        {
+          "label": "Health-check all targets",
+          "query": "?op=health"
+        }
+      ],
+      "use_case": "Route incoming requests to different upstream services without a standalone reverse proxy.",
       "config": {
         "base_path": "/proxy",
         "timeout": 30,
