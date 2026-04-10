@@ -146,6 +146,9 @@ type Route struct {
 	Description string `json:"description,omitempty"` // Human-readable description
 	Category    string `json:"category,omitempty"`    // Category for grouping (Basic, Math, etc.)
 	Example     string `json:"example,omitempty"`     // Example query parameters or usage
+	
+	// Configuration data passed to the WASM module
+	Config interface{} `json:"config,omitempty"` // Module-specific configuration
 }
 
 // Config represents the server configuration loaded from JSON.
@@ -842,6 +845,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Handle proxy paths specially
+	if strings.HasPrefix(path, "/proxy/") {
+		s.handleProxyRequest(w, r)
+		return
+	}
+
 	route, ok := s.cfg.Routes[path]
 	if !ok {
 		success = false
@@ -920,6 +929,109 @@ func (s *Server) runWASM(ctx context.Context, route *Route, stdin []byte, stdout
 		return nil
 	}
 	return err
+}
+
+// handleProxyRequest handles proxy requests by delegating to the proxy WASM module
+func (s *Server) handleProxyRequest(w http.ResponseWriter, r *http.Request) {
+	// Get proxy route configuration
+	proxyRoute, ok := s.cfg.Routes["/proxy"]
+	if !ok {
+		http.Error(w, "Proxy not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Extract the proxy path
+	proxyPath := strings.TrimPrefix(r.URL.Path, "/proxy")
+	if proxyPath == "" {
+		proxyPath = "/"
+	}
+
+	// Build parameters for the proxy WASM module
+	params := make(map[string]string)
+	
+	// Add proxy configuration if available
+	if config, ok := proxyRoute.Config.(map[string]interface{}); ok {
+		if configBytes, err := json.Marshal(config); err == nil {
+			params["config"] = string(configBytes)
+		}
+	}
+	
+	// Add request details
+	params["op"] = "proxy"
+	params["path"] = proxyPath
+	params["method"] = r.Method
+	params["url"] = r.URL.String()
+	params["remote_addr"] = r.RemoteAddr
+	
+	// Add headers
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			params["header_"+key] = values[0]
+		}
+	}
+	
+	// Add query parameters from original request
+	for k, vs := range r.URL.Query() {
+		if len(vs) > 0 {
+			params[k] = vs[0]
+		}
+	}
+
+	seed, _ := readRandomSeed()
+	payload := requestPayload{Params: params, Seed: seed}
+	stdin, _ := json.Marshal(payload)
+
+	// Execute the proxy WASM module
+	var buf bytes.Buffer
+	if err := s.runWASM(r.Context(), &proxyRoute, stdin, &buf); err != nil {
+		log.Printf("proxy module error: %v", err)
+		http.Error(w, "proxy error", http.StatusBadGateway)
+		return
+	}
+
+	// Parse the proxy response
+	var proxyResponse map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &proxyResponse); err != nil {
+		log.Printf("proxy response parse error: %v", err)
+		http.Error(w, "proxy response error", http.StatusBadGateway)
+		return
+	}
+
+	// Check if proxy was successful
+	success, ok := proxyResponse["success"].(bool)
+	if !ok || !success {
+		errorMsg := "proxy failed"
+		if errStr, ok := proxyResponse["error"].(string); ok {
+			errorMsg = errStr
+		}
+		http.Error(w, errorMsg, http.StatusBadGateway)
+		return
+	}
+
+	// Set response headers if available
+	if headers, ok := proxyResponse["headers"].(map[string]interface{}); ok {
+		for key, value := range headers {
+			if valueStr, ok := value.(string); ok {
+				w.Header().Set(key, valueStr)
+			}
+		}
+	}
+
+	// Set status code if available
+	statusCode := http.StatusOK
+	if code, ok := proxyResponse["status_code"].(float64); ok {
+		statusCode = int(code)
+	}
+	w.WriteHeader(statusCode)
+
+	// Write response body
+	if body, ok := proxyResponse["body"].(string); ok {
+		w.Write([]byte(body))
+	} else {
+		// If no body, write the JSON response
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buf.Bytes())
+	}
 }
 
 // loggingResponseWriter wraps http.ResponseWriter to capture status and size.

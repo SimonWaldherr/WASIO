@@ -117,6 +117,24 @@
         "mount": "/chat",
         "path": "./chat"
       }
+    },
+    "/proxy": {
+      "wasm_file": "instruments/proxy.wasm",
+      "cache": false,
+      "description": "Simple path-based HTTP proxy - define routes in config to proxy /proxy/foobar to target URLs",
+      "category": "Network",
+      "example": "?op=config&format=json",
+      "config": {
+        "base_path": "/proxy",
+        "timeout": 30,
+        "strip_path": true,
+        "routes": {
+          "foobar": "https://heise.de/",
+          "google": "https://www.google.com/",
+          "github": "https://github.com/",
+          "localhost": "http://localhost:3000/"
+        }
+      }
     }
   }
 }
