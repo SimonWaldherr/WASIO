@@ -46,7 +46,11 @@ Commands:
   list       List all configured instruments
   info       Show detailed information for a single route
   reload     Hot-reload instrument(s) without restarting the server
+	init       Scaffold a new WASIO package with wasio.toml
+	pull       Install an instrument from a wasio.toml manifest
   add        Install a new instrument from a URL or local file
+	keygen     Generate an ed25519 signing keypair
+	sign       Sign manifest capability declarations
   validate   Validate the configuration file
   version    Print version
   help       Show this help
@@ -57,6 +61,15 @@ Flags – serve:
 
 Flags – list / info / validate / add:
   --config string   Config file path (default: config.json)
+
+Flags – init:
+	--dir      string   Package directory to create (default: .)
+	--lang     string   Package language: go or rust
+
+Flags – pull:
+	--config            Config file path (default: config.json)
+	--require-signature Fail if the manifest is unsigned or invalid
+	--public-key string Override the manifest public key
 
 Flags – reload:
   --server string   Base URL of the running WASIO server (default: http://localhost:8080)
@@ -71,9 +84,13 @@ Examples:
   wasio list
   wasio list --json
   wasio info /calculator
+	wasio init --dir ./my-tool --lang go --name my-tool
+	wasio pull https://example.com/wasio.toml --require-signature
   wasio reload
   wasio reload /calculator
   wasio add https://example.com/my_tool.wasm --route /my-tool --desc "My custom tool"
+	wasio keygen --out keys/wasio
+	wasio sign --private-key keys/wasio.key ./wasio.toml
   wasio validate
 `)
 }

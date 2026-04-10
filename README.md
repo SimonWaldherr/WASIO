@@ -40,6 +40,9 @@ The project has evolved substantially beyond the original demo server. The impor
 - Automatic hot reload for rebuilt `.wasm` files plus `/_reload`
 - Structured JSON access logs with optional request IDs
 - CLI subcommands: `serve`, `list`, `info`, `reload`, `add`, `validate`, `version`, `help`
+- Packaging manifest support via `wasio.toml`
+- New packaging commands: `init`, `pull`, `keygen`, `sign`
+- Signed capability declarations verified during `wasio pull`
 - Global WASM execution timeout via `default_timeout_ms`
 - Global WASM memory cap via `max_memory_pages`
 - Request headers and request IDs forwarded into the WASM payload
@@ -64,7 +67,7 @@ The realistic positioning is closer to “Caddy for WASM HTTP tools” than “K
 
 ### Requirements
 
-- Go 1.23+
+- Go 1.25+
 - TinyGo for Go-based instruments
 - Rust + `wasm32-wasip1` target if you want Rust instruments
 
@@ -98,6 +101,7 @@ Then open:
 - `http://localhost:8080/monitoring`
 - `http://localhost:8080/hello_world?name=WASIO`
 - `http://localhost:8080/hello_rust?name=WASIO&lang=de`
+- `http://localhost:8080/life?op=ui`
 
 ## CLI
 
@@ -109,6 +113,10 @@ WASIO now includes an operator-friendly CLI.
 ./wasio list
 ./wasio list --json
 ./wasio info /calculator
+./wasio init --dir ./my-tool --lang go --name my-tool
+./wasio pull --require-signature examples/manifests/hello_rust.toml
+./wasio keygen --out keys/wasio
+./wasio sign --private-key keys/wasio.key ./wasio.toml
 ./wasio validate
 ./wasio reload
 ./wasio reload /llm
@@ -116,6 +124,63 @@ WASIO now includes an operator-friendly CLI.
 ```
 
 This is one of the key steps toward the Docker/Caddy goal: users should operate the platform without editing internals manually.
+
+## Packaging
+
+WASIO now has a portable package manifest: `wasio.toml`.
+
+It describes:
+
+- package name and version
+- language/toolchain
+- module source and build command
+- route metadata
+- example requests
+- capability declarations
+- optional ed25519 signature over the capability declaration set
+
+Example:
+
+```toml
+schema = 1
+name = "hello_rust"
+version = "0.1.0"
+language = "rust"
+
+[module]
+source = "../../instruments/hello_rust.wasm"
+build = "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/hello_rust.wasm ../../instruments/hello_rust.wasm"
+
+[route]
+path = "/hello_rust"
+methods = ["GET"]
+timeout_ms = 1000
+
+[metadata]
+category = "Basic"
+description = "Multilingual greeting service compiled from Rust"
+
+[capabilities]
+names = ["wasi:stdio", "wasi:env"]
+native_routes = []
+```
+
+Author workflow:
+
+```bash
+./wasio init --dir ./my-tool --lang go --name my-tool
+./wasio keygen --out keys/wasio
+./wasio sign --private-key keys/wasio.key ./my-tool/wasio.toml
+```
+
+Operator workflow:
+
+```bash
+./wasio pull --require-signature https://example.com/wasio.toml
+./wasio reload /my-tool
+```
+
+This is the first real step toward a Docker-like packaging and distribution model.
 
 ## Runtime Model
 
@@ -263,7 +328,7 @@ WASIO includes a growing set of example instruments across several categories:
 - Utils: `text_utils`, `time_utils`, `url_utils`, `json_utils`, `uuid`
 - Security: `hash_utils`
 - Network: `ip_utils`, `proxy`
-- Graphics: `mandelbrot`
+- Graphics: `mandelbrot`, `life`
 - File I/O: `process_file`
 - Web: `profile`, `wiki`, `chat`
 - AI: `llm`

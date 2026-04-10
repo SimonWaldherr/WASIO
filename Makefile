@@ -24,7 +24,7 @@ build:
 instruments: $(WASM_OUT)
 
 $(INST_DIR)/%.wasm: $(INST_DIR)/%.go
-	GOTOOLCHAIN=go1.23.3 tinygo build -o $@ -target wasi $<
+	GOTOOLCHAIN=go1.25.0 tinygo build -o $@ -target wasi $<
 
 ## rust-instruments: compile Rust instruments to WASM
 ## Requires: rustup target add wasm32-wasi

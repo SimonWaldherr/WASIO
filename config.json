@@ -239,6 +239,32 @@
       ],
       "use_case": "Generate checksums, fingerprints, or encoding conversions in HTTP pipelines."
     },
+    "/life": {
+      "wasm_file": "instruments/life.wasm",
+      "cache": false,
+      "description": "Conway's Game of Life with live SSE streaming to the browser; each generation step is computed inside WASM",
+      "category": "Graphics",
+      "example": "?op=ui",
+      "examples": [
+        {
+          "label": "Live UI",
+          "query": "?op=ui"
+        },
+        {
+          "label": "Gosper gun stream",
+          "query": "?op=ui&pattern=gosper&width=120&height=60&interval=80"
+        },
+        {
+          "label": "Acorn chaos",
+          "query": "?op=ui&pattern=acorn&width=110&height=70&interval=90"
+        },
+        {
+          "label": "Random soup",
+          "query": "?op=ui&pattern=random&density=0.27&width=96&height=54"
+        }
+      ],
+      "use_case": "Showcase live browser streaming, emergent simulation, and repeated host-orchestrated WASM execution."
+    },
     "/mandelbrot": {
       "wasm_file": "instruments/mandelbrot.wasm",
       "cache": true,

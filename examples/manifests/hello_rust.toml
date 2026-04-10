@@ -1,0 +1,41 @@
+schema = 1
+name = "hello_rust"
+version = "0.1.0"
+language = "rust"
+
+[module]
+  source = "../../instruments/hello_rust.wasm"
+  build = "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/hello_rust.wasm ../../instruments/hello_rust.wasm"
+
+[route]
+  path = "/hello_rust"
+  methods = ["GET"]
+  ttl = 0
+  timeout_ms = 1000
+
+[metadata]
+  category = "Basic"
+  description = "Multilingual greeting service compiled from Rust"
+  use_case = "Demonstrates a non-Go WASI instrument installed from a portable manifest"
+
+[[examples]]
+  label = "German greeting"
+  query = "?name=WASIO&lang=de"
+
+[[examples]]
+  label = "Japanese greeting"
+  query = "?name=World&lang=ja"
+
+[[examples]]
+  label = "5x Spanish"
+  query = "?name=Mundo&lang=es&n=5"
+
+[capabilities]
+  names = ["wasi:stdio", "wasi:env"]
+
+[signature]
+  algorithm = "ed25519"
+  key_id = "demo"
+  public_key = "otwai1UTYIVopw4wM085XfWUCDRJ9vulKPK8aQJ41to="
+  value = "B87O6MTFzFQPepd/ufko/Vuz0on0eMMA9HEN+U7nHzqqMKu19MOv5UhtuSKSBlt+DBqv5624Mj5Xw3Fr5hBLDw=="
+  signed_at = "2026-04-10T19:08:19Z"

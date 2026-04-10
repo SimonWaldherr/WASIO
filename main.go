@@ -1401,6 +1401,12 @@ func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+func (lrw *loggingResponseWriter) Flush() {
+	if flusher, ok := lrw.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // corsMiddleware applies CORS headers based on the server configuration.
 func corsMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	if !cfg.Enabled {
@@ -1717,8 +1723,16 @@ func main() {
 		cmdInfo(args[1:])
 	case "reload":
 		cmdReload(args[1:])
+	case "init":
+		cmdInit(args[1:])
+	case "pull":
+		cmdPull(args[1:])
 	case "add", "install":
 		cmdAdd(args[1:])
+	case "keygen":
+		cmdKeygen(args[1:])
+	case "sign":
+		cmdSign(args[1:])
 	case "validate":
 		cmdValidate(args[1:])
 	case "version", "--version", "-v":
