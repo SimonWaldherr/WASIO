@@ -48,7 +48,6 @@ func main() {
 	fmt.Printf(`{"error":"unknown operation %q – use the native /_llm/* endpoints for chat and models"}`, op)
 }
 
-
 // ── UI ────────────────────────────────────────────────────────────────────────
 
 // handleUI renders the full-page chat interface.
@@ -56,7 +55,7 @@ func main() {
 // character, so JS template literals and regex backticks are injected via
 // string concatenation using "\x60" (= backtick) instead.
 func handleUI() {
-	bt := "\x60"      // single backtick
+	bt := "\x60"        // single backtick
 	tbt := bt + bt + bt // triple backtick (for fenced-code regex)
 
 	// Part 1: HTML head, CSS, navbar, settings, chatbox, inputbar, script preamble

@@ -18,25 +18,25 @@ var privateRanges = []string{
 	"10.0.0.0/8",
 	"172.16.0.0/12",
 	"192.168.0.0/16",
-	"127.0.0.0/8",       // loopback
-	"169.254.0.0/16",    // link-local
-	"100.64.0.0/10",     // shared address space (RFC 6598)
-	"192.0.0.0/24",      // IETF protocol
-	"198.18.0.0/15",     // benchmarking
-	"198.51.100.0/24",   // documentation
-	"203.0.113.0/24",    // documentation
-	"240.0.0.0/4",       // reserved
+	"127.0.0.0/8",        // loopback
+	"169.254.0.0/16",     // link-local
+	"100.64.0.0/10",      // shared address space (RFC 6598)
+	"192.0.0.0/24",       // IETF protocol
+	"198.18.0.0/15",      // benchmarking
+	"198.51.100.0/24",    // documentation
+	"203.0.113.0/24",     // documentation
+	"240.0.0.0/4",        // reserved
 	"255.255.255.255/32", // broadcast
 }
 
 // privateRangesV6 lists special-purpose IPv6 ranges.
 var privateRangesV6 = []string{
-	"::1/128",        // loopback
-	"fc00::/7",       // unique local
-	"fe80::/10",      // link-local
-	"::ffff:0:0/96",  // IPv4-mapped
-	"2001:db8::/32",  // documentation
-	"100::/64",       // discard
+	"::1/128",       // loopback
+	"fc00::/7",      // unique local
+	"fe80::/10",     // link-local
+	"::ffff:0:0/96", // IPv4-mapped
+	"2001:db8::/32", // documentation
+	"100::/64",      // discard
 }
 
 func isPrivate(ip net.IP) bool {

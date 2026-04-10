@@ -20,7 +20,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
+	"flag"
 	"fmt"
 	htmlpkg "html"
 	"io"
@@ -165,6 +165,15 @@ type Route struct {
 
 	// Env contains environment variables injected into the WASM module.
 	Env map[string]string `json:"env,omitempty"`
+
+	// TimeoutMs is the per-route WASM execution deadline in milliseconds.
+	// Zero falls back to Config.DefaultTimeout; still zero means no deadline.
+	TimeoutMs int `json:"timeout_ms,omitempty"`
+
+	// MaxMemoryPages overrides the global WASM memory limit for this route
+	// (unit: 64 KiB pages). Zero means use the global Config.MaxMemoryPages.
+	// Note: per-route limits require separate runtimes; use sparingly.
+	MaxMemoryPages uint32 `json:"max_memory_pages,omitempty"`
 }
 
 // CORSConfig holds Cross-Origin Resource Sharing settings applied globally.
@@ -176,15 +185,26 @@ type CORSConfig struct {
 	MaxAge         int      `json:"max_age"` // Preflight cache in seconds
 }
 
+// LoggingConfig controls the access-log format and request tracing.
+type LoggingConfig struct {
+	// Format is "json" (default, structured) or "combined" (Apache Combined Log Format).
+	Format string `json:"format"`
+	// RequestID enables automatic X-Request-ID header generation when true.
+	RequestID bool `json:"request_id"`
+}
+
 // Config represents the server configuration loaded from JSON.
 type Config struct {
-	Port       string           `json:"port"`       // HTTP listen port, default "8080"
-	CacheTTL   int              `json:"cache_ttl"`  // Global response cache TTL in seconds
-	CacheSize  int              `json:"cache_size"` // Max entries for both module & response cache
-	IndexPage  bool             `json:"index_page"` // Enable index page (default: true)
-	Monitoring bool             `json:"monitoring"` // Enable monitoring endpoint (default: true)
-	CORS       CORSConfig       `json:"cors"`       // Global CORS configuration
-	Routes     map[string]Route `json:"routes"`     // Map URL paths to Route settings
+	Port           string           `json:"port"`               // HTTP listen port, default "8080"
+	CacheTTL       int              `json:"cache_ttl"`          // Global response cache TTL in seconds
+	CacheSize      int              `json:"cache_size"`         // Max entries for both module & response cache
+	IndexPage      bool             `json:"index_page"`         // Enable index page (default: true)
+	Monitoring     bool             `json:"monitoring"`         // Enable monitoring endpoint (default: true)
+	DefaultTimeout int              `json:"default_timeout_ms"` // Global WASM execution timeout in ms (0 = none)
+	MaxMemoryPages uint32           `json:"max_memory_pages"`   // Global WASM memory limit in 64 KiB pages (0 = unlimited)
+	Logging        LoggingConfig    `json:"logging"`            // Access-log format configuration
+	CORS           CORSConfig       `json:"cors"`               // Global CORS configuration
+	Routes         map[string]Route `json:"routes"`             // Map URL paths to Route settings
 }
 
 // LoadConfig reads and validates configuration from the given file path.
@@ -217,6 +237,9 @@ func LoadConfig(path string) (*Config, error) {
 	if _, exists := rawConfig["monitoring"]; !exists {
 		cfg.Monitoring = true // Default to true
 	}
+	if cfg.Logging.Format == "" {
+		cfg.Logging.Format = "json" // Default to structured JSON logging
+	}
 	return &cfg, nil
 }
 
@@ -235,9 +258,14 @@ type ModuleCache struct {
 	size  int
 }
 
-// NewModuleCache constructs a ModuleCache with given max size.
-func NewModuleCache(ctx context.Context, size int) *ModuleCache {
-	rt := wazero.NewRuntime(ctx)
+// NewModuleCache constructs a ModuleCache with given max size and optional memory limit.
+// maxMemPages is the WASM linear-memory ceiling in 64 KiB pages (0 = unlimited).
+func NewModuleCache(ctx context.Context, size int, maxMemPages uint32) *ModuleCache {
+	rtCfg := wazero.NewRuntimeConfig()
+	if maxMemPages > 0 {
+		rtCfg = rtCfg.WithMemoryLimitPages(maxMemPages)
+	}
+	rt := wazero.NewRuntimeWithConfig(ctx, rtCfg)
 	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
 	return &ModuleCache{
 		rt:    rt,
@@ -402,8 +430,10 @@ func (s *Server) RegisterNativeHandler(path string, h http.HandlerFunc) {
 
 // requestPayload is the JSON structure sent to the WASM module on stdin.
 type requestPayload struct {
-	Params map[string]string `json:"params"`
-	Seed   int64             `json:"seed"`
+	Params    map[string]string `json:"params"`
+	Headers   map[string]string `json:"headers"`    // Sanitised request headers
+	RequestID string            `json:"request_id"` // X-Request-ID for correlation
+	Seed      int64             `json:"seed"`
 }
 
 // NewServer initializes a Server with caches and context for shutdown.
@@ -412,7 +442,7 @@ func NewServer(cfg *Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:            cfg,
-		modC:           NewModuleCache(ctx, cfg.CacheSize),
+		modC:           NewModuleCache(ctx, cfg.CacheSize, cfg.MaxMemoryPages),
 		respC:          NewResponseCache(cfg.CacheSize),
 		stats:          NewServerStats(),
 		ctx:            ctx,
@@ -440,8 +470,8 @@ func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
 //	GET /_reload?route=/x – flush module cache entry for a single route
 func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	type result struct {
-		Flushed  []string `json:"flushed"`
-		RespCache bool    `json:"response_cache_flushed"`
+		Flushed   []string `json:"flushed"`
+		RespCache bool     `json:"response_cache_flushed"`
 	}
 
 	q := r.URL.Query()
@@ -1153,15 +1183,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build payload from query parameters and random seed
+	// Build payload from query parameters, sanitised request headers, and a random seed.
 	params := make(map[string]string, len(r.URL.Query()))
 	for k, vs := range r.URL.Query() {
 		if len(vs) > 0 {
 			params[k] = vs[0]
 		}
 	}
+	headers := make(map[string]string)
+	skipHeaders := map[string]bool{"Cookie": true, "Set-Cookie": true}
+	for k, vs := range r.Header {
+		if !skipHeaders[k] && len(vs) > 0 {
+			headers[k] = vs[0]
+		}
+	}
 	seed, _ := readRandomSeed()
-	payload := requestPayload{Params: params, Seed: seed}
+	payload := requestPayload{
+		Params:    params,
+		Headers:   headers,
+		RequestID: r.Header.Get("X-Request-ID"),
+		Seed:      seed,
+	}
 	stdin, _ := json.Marshal(payload)
 
 	// Execute the WASM module
@@ -1187,15 +1229,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // runWASM loads (or reuses) and instantiates the WASM module, piping stdin/stdout.
+// A per-route or global execution deadline is applied when configured.
+// Note: wazero's default ModuleConfig already runs the WASI command entrypoint
+// "_start" during InstantiateModule, so we must not call it manually again.
 func (s *Server) runWASM(ctx context.Context, route *Route, stdin []byte, stdout io.Writer) error {
+	// Apply per-route timeout, falling back to the global default.
+	timeoutMs := route.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = s.cfg.DefaultTimeout
+	}
+	if timeoutMs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+		defer cancel()
+	}
+
 	mod, err := s.modC.Get(ctx, route.WASMFile, s.stats)
 	if err != nil {
 		return err
 	}
 
+	stderrBuf := &bytes.Buffer{}
 	config := wazero.NewModuleConfig().
 		WithStdin(bytes.NewReader(stdin)).
-		WithStdout(stdout)
+		WithStdout(stdout).
+		WithStderr(stderrBuf)
 
 	// Inject per-route environment variables into the WASM module
 	for k, v := range route.Env {
@@ -1210,17 +1268,13 @@ func (s *Server) runWASM(ctx context.Context, route *Route, stdin []byte, stdout
 
 	instance, err := s.modC.rt.InstantiateModule(ctx, mod, config)
 	if err != nil {
+		if stderrBuf.Len() > 0 {
+			return fmt.Errorf("instantiate module: %w: %s", err, strings.TrimSpace(stderrBuf.String()))
+		}
 		return fmt.Errorf("instantiate module: %w", err)
 	}
 	defer instance.Close(ctx)
-
-	_, err = instance.ExportedFunction("_start").Call(ctx)
-	var exitErr interface{ ExitCode() uint32 }
-	if err != nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 0 {
-		// Clean WASI exit(0) is not an error
-		return nil
-	}
-	return err
+	return nil
 }
 
 // handleProxyRequest handles proxy requests by delegating to the proxy WASM module
@@ -1401,27 +1455,70 @@ func corsMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	})
 }
 
-// logMiddleware logs each HTTP request in Apache combined log format.
-func logMiddleware(next http.Handler) http.Handler {
+// logMiddleware logs one line per request in the configured format.
+// cfg.Format "json" (default) emits a structured JSON object.
+// cfg.Format "combined" emits the Apache Combined Log Format.
+func logMiddleware(cfg LoggingConfig, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		lrw := &loggingResponseWriter{ResponseWriter: w}
 		next.ServeHTTP(lrw, r)
 
-		// Determine client IP
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			host = r.RemoteAddr
 		}
+		dur := time.Since(start)
 
-		// Apache Common Log Format
-		log.Printf("%s - - [%s] \"%s %s %s\" %d %d \"%s\" \"%s\"",
-			host,
-			start.Format("02/Jan/2006:15:04:05 -0700"),
-			r.Method, r.RequestURI, r.Proto,
-			lrw.status, lrw.size,
-			r.Referer(), r.UserAgent(),
-		)
+		if cfg.Format == "combined" {
+			log.Printf("%s - - [%s] \"%s %s %s\" %d %d \"%s\" \"%s\"",
+				host,
+				start.Format("02/Jan/2006:15:04:05 -0700"),
+				r.Method, r.RequestURI, r.Proto,
+				lrw.status, lrw.size,
+				r.Referer(), r.UserAgent(),
+			)
+			return
+		}
+
+		// Structured JSON log entry (default)
+		entry := map[string]interface{}{
+			"time":        start.UTC().Format(time.RFC3339Nano),
+			"method":      r.Method,
+			"path":        r.URL.Path,
+			"status":      lrw.status,
+			"bytes":       lrw.size,
+			"duration_ms": dur.Milliseconds(),
+			"remote":      host,
+			"user_agent":  r.UserAgent(),
+		}
+		if q := r.URL.RawQuery; q != "" {
+			entry["query"] = q
+		}
+		if rid := r.Header.Get("X-Request-ID"); rid != "" {
+			entry["request_id"] = rid
+		}
+		if ref := r.Referer(); ref != "" {
+			entry["referer"] = ref
+		}
+		b, _ := json.Marshal(entry)
+		log.Print(string(b))
+	})
+}
+
+// requestIDMiddleware attaches a unique X-Request-ID to every request and response.
+// If the client already supplies the header, the existing value is preserved.
+func requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			var b [8]byte
+			rand.Read(b[:]) //nolint:errcheck // Read never fails on crypto/rand
+			id = fmt.Sprintf("%x", b)
+			r.Header.Set("X-Request-ID", id)
+		}
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -1603,49 +1700,85 @@ func renderExampleActions(host, path string, examples []RouteExample) string {
 }
 
 func main() {
-	// Use standard logger with timestamp
-	log.SetFlags(log.LstdFlags)
+	// Disable stdlib log prefix – structured logger embeds its own timestamp.
+	log.SetFlags(0)
 
-	// Load configuration
-	cfg, err := LoadConfig("config.json")
+	args := os.Args[1:]
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		cmdServe(args)
+		return
+	}
+	switch args[0] {
+	case "serve", "run", "start":
+		cmdServe(args[1:])
+	case "list":
+		cmdList(args[1:])
+	case "info":
+		cmdInfo(args[1:])
+	case "reload":
+		cmdReload(args[1:])
+	case "add", "install":
+		cmdAdd(args[1:])
+	case "validate":
+		cmdValidate(args[1:])
+	case "version", "--version", "-v":
+		fmt.Printf("wasio %s\n", Version)
+	case "help", "--help", "-h":
+		cmdHelp()
+	default:
+		// Unknown first arg – treat whole args slice as server flags.
+		cmdServe(args)
+	}
+}
+
+// cmdServe starts the WASIO HTTP server.
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	configPath := fs.String("config", "config.json", "path to config file")
+	portFlag := fs.String("port", "", "override listen port from config")
+	fs.Parse(args) //nolint:errcheck // ExitOnError handles the error
+
+	cfg, err := LoadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("configuration error: %v", err)
+		log.Fatalf(`{"level":"fatal","msg":"configuration error","error":%q}`, err)
+	}
+	if *portFlag != "" {
+		cfg.Port = *portFlag
 	}
 
-	// Initialize server
 	server := NewServer(cfg)
 
-	// Wrap with logging and CORS middleware
-	handler := logMiddleware(corsMiddleware(cfg.CORS, server))
+	// Middleware chain (outermost → innermost):
+	//   structured logger → request-ID → CORS → WASM router
+	var handler http.Handler = server
+	handler = corsMiddleware(cfg.CORS, handler)
+	if cfg.Logging.RequestID {
+		handler = requestIDMiddleware(handler)
+	}
+	handler = logMiddleware(cfg.Logging, handler)
 
-	// HTTP server with graceful shutdown
 	httpSrv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: handler,
 	}
 
-	// Start listening
 	go func() {
-		log.Printf("WASIO listening on %s", httpSrv.Addr)
+		log.Printf(`{"level":"info","msg":"WASIO listening","addr":%q,"version":%q}`, httpSrv.Addr, Version)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen error: %v", err)
+			log.Fatalf(`{"level":"fatal","msg":"listen error","error":%q}`, err)
 		}
 	}()
 
-	// Wait for interrupt (SIGINT/SIGTERM)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Print("shutdown initiated")
+	log.Print(`{"level":"info","msg":"shutdown initiated"}`)
 
-	// Context with timeout for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(ctx); err != nil {
-		log.Printf("shutdown error: %v", err)
+		log.Printf(`{"level":"error","msg":"shutdown error","error":%q}`, err)
 	}
-
-	// Cancel any background context
 	server.cancel()
-	log.Print("shutdown complete")
+	log.Print(`{"level":"info","msg":"shutdown complete"}`)
 }

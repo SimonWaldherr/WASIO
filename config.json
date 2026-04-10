@@ -4,7 +4,30 @@
   "cache_size": 1024,
   "index_page": true,
   "monitoring": true,
+  "default_timeout_ms": 30000,
+  "max_memory_pages": 0,
+  "logging": {
+    "format": "json",
+    "request_id": true
+  },
   "routes": {
+    "/hello_rust": {
+      "wasm_file": "instruments/hello_rust.wasm",
+      "cache": false,
+      "description": "Multilingual greeting service compiled from Rust – demonstrates language-agnostic WASM instruments",
+      "category": "Basic",
+      "example": "?name=WASIO&lang=de",
+      "examples": [
+        { "label": "German greeting",  "query": "?name=WASIO&lang=de" },
+        { "label": "Japanese greeting", "query": "?name=World&lang=ja" },
+        { "label": "5× Spanish",       "query": "?name=Mundo&lang=es&n=5" },
+        { "label": "English (default)", "query": "?name=Alice" }
+      ],
+      "use_case": "Proves WASIO is language-agnostic: any language compiling to WASI works as an instrument.",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      }
+    },
     "/hello_world": {
       "wasm_file": "instruments/hello_world.wasm",
       "cache": false,

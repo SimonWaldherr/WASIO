@@ -1,0 +1,16 @@
+# Build with: cargo build --target wasm32-wasip1 --release
+[package]
+name = "hello_rust"
+version = "0.1.0"
+edition = "2021"
+description = "WASIO instrument – multilingual greeting service in Rust"
+
+[[bin]]
+name = "hello_rust"
+path = "src/main.rs"
+
+[profile.release]
+# Optimise for binary size, important for WASM cold-start latency.
+opt-level = "s"
+lto       = true
+strip     = true

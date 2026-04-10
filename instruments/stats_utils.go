@@ -130,7 +130,13 @@ func main() {
 	case "summary":
 		m := mean(nums)
 		fmt.Printf("Count:    %d\n", len(nums))
-		fmt.Printf("Sum:      %g\n", func() float64 { s := 0.0; for _, v := range nums { s += v }; return s }())
+		fmt.Printf("Sum:      %g\n", func() float64 {
+			s := 0.0
+			for _, v := range nums {
+				s += v
+			}
+			return s
+		}())
 		fmt.Printf("Min:      %g\n", sorted[0])
 		fmt.Printf("Max:      %g\n", sorted[len(sorted)-1])
 		fmt.Printf("Range:    %g\n", sorted[len(sorted)-1]-sorted[0])

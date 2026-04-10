@@ -1,2 +1,3 @@
 instruments/*.wasm
 wasio
+instruments/hello_rust/target

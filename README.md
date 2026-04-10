@@ -1,487 +1,202 @@
 # WASIO - WebAssembly System Interface Orchestrator
 
-[![DOI](https://zenodo.org/badge/884922110.svg)](https://doi.org/10.5281/zenodo.15257309)  
+[![DOI](https://zenodo.org/badge/884922110.svg)](https://doi.org/10.5281/zenodo.15257309)
 
 [![Watch the video](https://img.youtube.com/vi/5B7Q5rJZhc0/maxresdefault.jpg)](https://youtu.be/5B7Q5rJZhc0)
 
-WASIO (WebAssembly System Interface Orchestrator) is a comprehensive Go-based server for dynamically loading, executing, and managing WebAssembly (WASM) instruments in response to HTTP requests. WASIO demonstrates the power of WebAssembly for creating isolated, efficient, and secure compute environments through a rich collection of example applications.
+WASIO is a self-hosted HTTP runtime for WebAssembly instruments. It loads WASI modules on demand, routes requests to them, injects structured request data via stdin, captures stdout as the response, and keeps the whole system in a single Go binary.
 
-The project serves as both a production-ready server framework and an educational platform showcasing various WebAssembly use cases, from simple calculations to complex applications like wikis and chat systems.
+The product direction is deliberately pragmatic:
 
-**Note: While functional, this project is currently not production ready and is intended for demonstration and educational purposes.**  
+- Docker: simple packaging, install, and local workflows
+- Cloudflare: fast edge-style request handling and native host bridges where WASI cannot reach the network
+- wasmCloud: modular components and extensible host capabilities
+- Spin: HTTP-first developer ergonomics for WebAssembly apps
+- Caddy: one-binary deployment, strong defaults, and minimal operational friction
 
-## Features
+WASIO is not there yet, but the current codebase already has the right foundations: hot reload, structured config, native host extensions, observability, and a CLI.
 
-- **Dynamic Routing**: Map HTTP endpoints to specific WASM instruments through a configuration file.
-- **Advanced IPC**: Structured JSON-based data transfer allows complex parameter handling and efficient interaction with WASM modules.
-- **File System Access**: Configurable, controlled access to server directories, enabling instruments to read/write files.
-- **Caching**: Built-in response caching with configurable TTLs for optimized performance.
-- **Flexible Configuration**: Define port, routes, caching options, and file system mounts in a single JSON file.
+## Current Status
 
-## Included Instruments (Examples)
+WASIO currently provides:
 
-WASIO comes with a comprehensive collection of example instruments that demonstrate various WebAssembly capabilities and use cases:
+- Dynamic route-to-WASM mapping through `config.json`
+- WASM module caching with automatic mtime-based hot reload
+- Response caching with per-route TTLs
+- Structured JSON request payloads over stdin
+- Optional filesystem mounts for WASI guests
+- Native host handlers for features that pure WASI cannot do safely or directly
+- A built-in instrument catalog UI and monitoring dashboard
+- A CLI for operating and extending a deployment
 
-### 🌍 Basic Examples
+WASIO is usable today as a local platform, internal tool runner, or self-hosted WASM gateway. It is not yet a full registry/orchestration platform.
 
-#### Hello World (`/hello_world`)
+## What Changed Recently
 
-A simple greeting service that demonstrates basic parameter handling and JSON communication.
+The project has evolved substantially beyond the original demo server. The important additions are:
 
-- **Input**: `name` parameter (optional, defaults to "World")
-- **Output**: Personalized greeting message
-- **Example**: `curl "http://localhost:8080/hello_world?name=Alice"`
-- **Use Case**: Basic WASM interaction, parameter passing demonstration
+- Universal native handler registry instead of hardcoded instrument logic in `main.go`
+- Host-side OpenAI-compatible LLM bridge for LM Studio / OpenAI-style APIs
+- Automatic hot reload for rebuilt `.wasm` files plus `/_reload`
+- Structured JSON access logs with optional request IDs
+- CLI subcommands: `serve`, `list`, `info`, `reload`, `add`, `validate`, `version`, `help`
+- Global WASM execution timeout via `default_timeout_ms`
+- Global WASM memory cap via `max_memory_pages`
+- Request headers and request IDs forwarded into the WASM payload
+- Improved instrument overview with category filters and search
+- Rust instrument support via `make all-with-rust`
+- New example instrument: `/hello_rust`
 
-#### Random Number Generator (`/random`)
+## Why WASIO Exists
 
-Generates random numbers using a seed-based approach for reproducible randomness.
+Containers are powerful, but they are heavier than necessary for many request-driven tools. WASM gives better isolation and startup characteristics for small, single-purpose units. WASIO aims to make that model operationally boring:
 
-- **Input**: Automatic seed generation from WASIO
-- **Output**: Random number between 0-99
-- **Example**: `curl "http://localhost:8080/random"`
-- **Use Case**: Demonstrates deterministic random generation in WASM environments
+- one binary
+- one config file
+- explicit capability exposure
+- fast request startup
+- easy local development
+- no daemon or cluster required
 
-#### Fibonacci Calculator (`/fibonacci`)
+The realistic positioning is closer to “Caddy for WASM HTTP tools” than “Kubernetes for everything.” If the operator experience becomes excellent, the platform can grow from there.
 
-Computes Fibonacci numbers with caching enabled for performance optimization.
+## Quick Start
 
-- **Input**: `n` parameter (non-negative integer)
-- **Output**: nth Fibonacci number
-- **Features**: Response caching (TTL: 600 seconds)
-- **Example**: `curl "http://localhost:8080/fibonacci?n=10"`
-- **Use Case**: CPU-intensive calculations, caching demonstration
+### Requirements
 
-### 🧮 Mathematical and Utility Tools
+- Go 1.23+
+- TinyGo for Go-based instruments
+- Rust + `wasm32-wasip1` target if you want Rust instruments
 
-#### Calculator (`/calculator`)
+### Build
 
-A comprehensive calculator supporting multiple mathematical operations.
+```bash
+git clone https://github.com/SimonWaldherr/WASIO.git
+cd WASIO
 
-- **Input**: `op` (operation), `a` and `b` (numbers)
-- **Operations**: add, sub, mul, div, pow, mod
-- **Example**: `curl "http://localhost:8080/calculator?op=add&a=5&b=3"`
-- **Features**: Error handling, multiple operation types
-- **Use Case**: Mathematical computations, input validation
+make build
+make instruments
+make run
+```
 
-#### Time Utilities (`/time_utils`)
+To also build Rust instruments:
 
-Advanced time and date manipulation with timezone support.
+```bash
+rustup target add wasm32-wasip1
+make all-with-rust
+```
 
-- **Operations**: 
-  - `unix`: Get Unix timestamp
-  - `iso`: ISO 8601 format
-  - `add`: Add duration to current time
-  - `diff`: Calculate time difference
-  - `weekday`, `year`, `month`, `day`: Extract components
-- **Parameters**: `tz` (timezone), `format` (output format), `duration`, `target`
-- **Example**: `curl "http://localhost:8080/time_utils?op=add&duration=1h&tz=UTC"`
-- **Use Case**: Time calculations, timezone handling
+### Run
 
-#### Text Utilities (`/text_utils`)
+```bash
+./wasio serve
+```
 
-Comprehensive text processing and analysis tools.
+Then open:
 
-- **Operations**: upper, lower, title, reverse, length, words, chars, trim, split, contains, replace, palindrome
-- **Parameters**: `text` (input), `op` (operation), additional params per operation
-- **Example**: `curl "http://localhost:8080/text_utils?op=reverse&text=hello"`
-- **Features**: Character counting, word analysis, pattern matching
-- **Use Case**: Text processing, string manipulation
+- `http://localhost:8080/`
+- `http://localhost:8080/monitoring`
+- `http://localhost:8080/hello_world?name=WASIO`
+- `http://localhost:8080/hello_rust?name=WASIO&lang=de`
 
-#### URL Utilities (`/url_utils`)
+## CLI
 
-URL encoding, decoding, parsing, and validation utilities.
+WASIO now includes an operator-friendly CLI.
 
-- **Operations**: encode, decode, parse, validate, join
-- **Parameters**: `input` (URL/text), `op` (operation), `base` (for join)
-- **Example**: `curl "http://localhost:8080/url_utils?op=parse&input=https://example.com/path?key=value"`
-- **Features**: Component extraction, query parameter parsing
-- **Use Case**: URL manipulation, web development
+```bash
+./wasio help
+./wasio version
+./wasio list
+./wasio list --json
+./wasio info /calculator
+./wasio validate
+./wasio reload
+./wasio reload /llm
+./wasio add https://example.com/my_tool.wasm --route /my-tool --category Utils --desc "My custom tool"
+```
 
-#### Hash and Encoding Utilities (`/hash_utils`)
+This is one of the key steps toward the Docker/Caddy goal: users should operate the platform without editing internals manually.
 
-Cryptographic hashing and encoding/decoding utilities.
+## Runtime Model
 
-- **Operations**: md5, sha1, sha256, sha512, base64encode, base64decode, hexencode, hexdecode, all
-- **Parameters**: `input` (text to process), `op` (operation)
-- **Example**: `curl "http://localhost:8080/hash_utils?op=sha256&input=hello"`
-- **Features**: Multiple hash algorithms, encoding formats
-- **Use Case**: Security, data integrity, encoding conversion
+For each request, WASIO:
 
-### 🎨 Graphics and Visualization
+1. Matches the HTTP path to a configured route.
+2. Reuses or recompiles the `.wasm` module.
+3. Builds a JSON request payload.
+4. Instantiates the guest in a WASI sandbox.
+5. Passes structured data on stdin.
+6. Returns stdout as the HTTP response.
 
-#### Mandelbrot Set Generator (`/mandelbrot`)
+The request payload currently includes:
 
-Generates PNG images of the Mandelbrot fractal with customizable parameters.
+```json
+{
+  "params": {
+    "name": "WASIO"
+  },
+  "headers": {
+    "User-Agent": "curl/8.7.1"
+  },
+  "request_id": "6b16ea56a896fa53",
+  "seed": 42
+}
+```
 
-- **Input**: `cx`, `cy` (center coordinates), `zoom`, `width`, `height`, `max_iter`
-- **Output**: PNG image data
-- **Features**: Real-time fractal rendering, parameter-driven visualization
-- **Example**: `curl "http://localhost:8080/mandelbrot?cx=-0.5&cy=0&zoom=1&width=800&height=600" > mandelbrot.png`
-- **Use Case**: Image generation, mathematical visualization, binary data handling
+Notes:
 
-### 📁 File System Operations
+- `Cookie` and `Set-Cookie` are intentionally not forwarded into guest payloads.
+- Pure WASI modules do not have general outbound networking. If an instrument needs network access, implement it as a native host bridge.
 
-#### File Processor (`/process_file`)
+## Native Host Handlers
 
-Demonstrates controlled file system access within WASM environments.
+Some capabilities do not belong inside pure WASI modules. WASIO now supports native host handlers registered outside `main.go`.
 
-- **Input**: Reads from mounted `/data` directory
-- **Output**: File analysis (line count and content)
-- **Features**: Secure file system mounting, read-only access
-- **Example**: `curl "http://localhost:8080/process_file"`
-- **Use Case**: File processing, secure file system access patterns
+This is how the LLM integration works:
 
-### 🌐 Web Applications
+- `/llm` is the WebAssembly UI instrument
+- `/_llm/chat` and `/_llm/models` are native Go endpoints
+- the browser talks to the native endpoints
+- the host performs the HTTP call to LM Studio / OpenAI-compatible APIs
 
-#### Profile Generator (`/profile`)
+This pattern is the bridge toward Cloudflare/wasmCloud-style host capabilities: keep the guest small and pure, move privileged integration to the host.
 
-Creates dynamic HTML profiles using template rendering.
+## Hot Reload
 
-- **Input**: `name`, `age`, `hobbies` (comma-separated) parameters
-- **Output**: Rendered HTML profile page
-- **Features**: Template processing, dynamic HTML generation
-- **Example**: `curl "http://localhost:8080/profile?name=John&age=25&hobbies=reading,coding,hiking"`
-- **Use Case**: Dynamic web content generation, template processing
+WASIO automatically recompiles a module when its `.wasm` file changes.
 
-#### Mini Wiki (`/wiki`)
+Manual reload endpoints are also available:
 
-A complete wiki system with full CRUD operations, search, and tagging.
+```bash
+curl http://localhost:8080/_reload
+curl http://localhost:8080/_reload?route=/calculator
+curl http://localhost:8080/_reload?all=1
+./wasio reload
+./wasio reload /calculator
+```
 
-- **Features**:
-  - Page creation, editing, and deletion
-  - Full-text search functionality
-  - Tag-based organization
-  - Backlink tracking
-  - Dark/light theme support
-  - Bootstrap-based responsive UI
-- **Input**: Various parameters (`page`, `edit`, `search`, `tag`, `content`, etc.)
-- **Output**: Complete HTML wiki interface or JSON data
-- **Example**: `curl "http://localhost:8080/wiki"` or visit in browser
-- **Use Case**: Complex web applications, content management, file persistence
+This is one of the biggest developer-experience upgrades compared to the original version.
 
-#### Real-time Chat (`/chat`)
+## Logging And Observability
 
-A functional chat application with persistent message storage.
+WASIO now supports structured JSON access logs and request correlation.
 
-- **Features**:
-  - Real-time messaging interface
-  - Message persistence to JSON files
-  - Bootstrap-based responsive UI
-  - Automatic message refresh
-  - Username handling
-- **Actions**:
-  - `action=send`: Post new message
-  - `action=get`: Retrieve message history
-  - `action=ui` or default: Serve chat interface
-- **Example**: Visit `http://localhost:8080/chat` in browser
-- **Use Case**: Real-time applications, persistent data storage, interactive UIs
+Example log line:
 
-### 🧠 Advanced Examples
+```json
+{"bytes":73009,"duration_ms":0,"method":"GET","path":"/","remote":"::1","request_id":"6b16ea56a896fa53","status":200,"time":"2026-04-10T18:44:45.816192Z","user_agent":"Safari/..."}
+```
 
-#### LLaMA Chat Integration (`/llama-chat`)
+Current observability features:
 
-Integration endpoint for LLaMA-based AI chat functionality (requires additional setup).
+- JSON or Apache combined access logs
+- optional `X-Request-ID` generation
+- built-in `/monitoring` dashboard
+- `/monitoring?format=json` machine-readable stats
 
-- **Input**: Chat messages and conversation context
-- **Output**: AI-generated responses
-- **Features**: AI model integration, conversation handling
-- **Use Case**: AI integration, natural language processing
+## Configuration
 
-Each instrument demonstrates different aspects of WebAssembly capabilities:
-
-- **Isolation**: Each WASM module runs in its own isolated environment
-- **Performance**: Near-native execution speed for computational tasks
-- **Security**: Controlled access to system resources through explicit mounts
-- **Portability**: Same WASM modules can run across different platforms
-- **Language Flexibility**: All examples written in Go but could be any WASM-compatible language
-
-## Built-in Features
-
-### 🏠 Index Page (`/`)
-
-WASIO now includes a beautiful, responsive index page that provides:
-
-- **Instrument Discovery**: Visual overview of all available instruments
-- **Quick Statistics**: Server metrics and performance indicators
-- **Interactive Testing**: Direct links to test each instrument
-- **Categorization**: Instruments grouped by type (Basic, Math, Graphics, etc.)
-- **URL Copying**: Easy copying of instrument URLs for testing
-
-The index page is enabled by default but can be disabled via configuration.
-
-### 📊 Monitoring Dashboard (`/monitoring`)
-
-Comprehensive monitoring and statistics dashboard featuring:
-
-- **Real-time Metrics**: Request counts, success rates, response times
-- **Cache Statistics**: Hit rates for both response and module caches
-- **Route Analytics**: Per-route request statistics and configuration
-- **System Information**: Server uptime, memory usage, performance data
-- **Auto-refresh**: Automatic page refresh every 30 seconds
-- **JSON API**: Machine-readable stats at `/monitoring?format=json`
-
-The monitoring dashboard is enabled by default and provides both human-readable HTML and JSON formats.
-
-## Getting Started
-
-### Prerequisites
-
-- **Go**: Version 1.20 or higher.
-- **TinyGo**: Required to compile Go-based WASM instruments.
-- **Wazero**: WASM runtime integrated into WASIO for executing instruments.
-
-### Quick Setup
-
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/SimonWaldherr/WASIO.git
-   cd WASIO
-   ```
-
-2. **Build the Instruments**:
-   Compile your WASM instruments with TinyGo, or use the included `build.sh` script to compile all `.go` files in the `instruments` folder.
-
-   ```bash
-   ./build.sh
-   ```
-
-3. **Configure WASIO**:
-   Edit `config.json` to define routes, cache settings, and any filesystem mounts needed by the instruments.
-
-   Example `config.json`:
-   ```json
-   {
-     "port": "8080",
-     "cache_ttl": 300,
-     "routes": {
-       "/hello_world": {
-         "wasm_file": "instruments/hello_world.wasm",
-         "cache": true,
-         "ttl": 600
-       },
-       "/file_processor": {
-         "wasm_file": "instruments/file_processor.wasm",
-         "cache": false,
-         "filesystem": {
-           "mount": "/data",
-           "path": "./data"
-         }
-       }
-     }
-   }
-   ```
-
-4. **Run WASIO**:
-   ```bash
-   go run main.go
-   ```
-
-   WASIO will start and listen for HTTP requests on the configured port.
-
-### Example Requests
-
-Once WASIO is running, you can test the various instruments:
-
-#### Basic Examples
-
-1. **Hello World**:
-
-   ```bash
-   curl "http://localhost:8080/hello_world?name=Alice"
-   # Output: Hello, Alice! (seed: 1234567890)
-   ```
-
-2. **Random Number**:
-
-   ```bash
-   curl "http://localhost:8080/random"
-   # Output: Generated Random Number: 42
-   ```
-
-3. **Fibonacci Calculation**:
-
-   ```bash
-   curl "http://localhost:8080/fibonacci?n=10"
-   # Output: Fibonacci number for n=10 is 55
-   ```
-
-#### Mathematical and Utility Tools
-
-4. **Calculator**:
-
-   ```bash
-   curl "http://localhost:8080/calculator?op=add&a=15&b=25"
-   # Output: 15.00 + 25.00 = 40.00
-   
-   curl "http://localhost:8080/calculator?op=pow&a=2&b=8"
-   # Output: 2.00 ^ 8 = 256.00
-   ```
-
-5. **Time Utilities**:
-
-   ```bash
-   curl "http://localhost:8080/time_utils?op=add&duration=2h30m"
-   # Output: Time + 2h30m = 2024-07-31T17:30:00Z
-   
-   curl "http://localhost:8080/time_utils?tz=America/New_York&format=kitchen"
-   # Output: Current time: 3:04PM (timezone: America/New_York)
-   ```
-
-6. **Text Processing**:
-
-   ```bash
-   curl "http://localhost:8080/text_utils?op=reverse&text=hello%20world"
-   # Output: Reversed: dlrow olleh
-   
-   curl "http://localhost:8080/text_utils?op=palindrome&text=racecar"
-   # Output: Is palindrome: true
-   ```
-
-7. **URL Utilities**:
-
-   ```bash
-   curl "http://localhost:8080/url_utils?op=parse&input=https://example.com/path?key=value"
-   # Output: URL components breakdown
-   
-   curl "http://localhost:8080/url_utils?op=encode&input=hello world"
-   # Output: URL encoded: hello%20world
-   ```
-
-8. **Hash Utilities**:
-
-   ```bash
-   curl "http://localhost:8080/hash_utils?op=sha256&input=hello"
-   # Output: SHA256: 2cf24dba4f21d4288cff...
-   
-   curl "http://localhost:8080/hash_utils?op=all&input=test"
-   # Output: All hash formats for 'test'
-   ```
-
-#### Graphics and Data
-
-9. **Mandelbrot Fractal** (save as PNG):
-
-   ```bash
-   curl "http://localhost:8080/mandelbrot?cx=-0.5&cy=0&zoom=1&width=800&height=600" > mandelbrot.png
-   ```
-
-10. **File Processing**:
-
-    ```bash
-    curl "http://localhost:8080/process_file"
-    # Output: File has 3 lines. Content: [file content]
-    ```
-
-#### Web Applications
-
-11. **Profile Generation**:
-
-    ```bash
-    curl "http://localhost:8080/profile?name=John&age=25&hobbies=reading,coding,hiking"
-    # Returns: Complete HTML profile page
-    ```
-
-12. **Wiki System** (best viewed in browser):
-
-    ```bash
-    # Get the main wiki interface
-    curl "http://localhost:8080/wiki"
-    
-    # Search for content
-    curl "http://localhost:8080/wiki?search=welcome"
-    
-    # Get a specific page
-    curl "http://localhost:8080/wiki?page=about"
-    ```
-
-13. **Real-time Chat** (interactive, best in browser):
-
-    ```bash
-    # Get chat interface
-    curl "http://localhost:8080/chat"
-    
-    # Send a message (URL encoded)
-    curl "http://localhost:8080/chat?action=send&username=Alice&text=Hello%20World"
-    
-    # Get recent messages as JSON
-    curl "http://localhost:8080/chat?action=get&n=10"
-    ```
-
-#### Built-in Endpoints
-
-14. **Index Page** (best in browser):
-
-    ```bash
-    curl "http://localhost:8080/"
-    # Returns: Beautiful index page with all instruments
-    ```
-
-15. **Monitoring Dashboard**:
-
-    ```bash
-    # HTML dashboard
-    curl "http://localhost:8080/monitoring"
-    
-    # JSON statistics
-    curl "http://localhost:8080/monitoring?format=json"
-    ```
-
-#### Advanced Testing
-
-For the web-based instruments and dashboards, open your browser and navigate to:
-
-- `http://localhost:8080/` - Main index page with instrument overview
-- `http://localhost:8080/monitoring` - Comprehensive monitoring dashboard
-- `http://localhost:8080/wiki` - Full-featured wiki with editing capabilities
-- `http://localhost:8080/chat` - Real-time chat interface
-- `http://localhost:8080/profile?name=YourName&age=30&hobbies=music,travel` - Profile page
-
-## Architecture and Technical Details
-
-### How WASIO Works
-
-WASIO operates as a reverse proxy that routes HTTP requests to WebAssembly modules (instruments). Here's the execution flow:
-
-1. **Request Reception**: HTTP requests are received and matched against configured routes
-2. **Module Loading**: The corresponding WASM module is loaded (with LRU caching for performance)
-3. **Environment Setup**: A sandboxed WASI environment is created with controlled filesystem access
-4. **Data Marshaling**: Request parameters are converted to JSON and passed via stdin
-5. **Execution**: The WASM module executes with access only to explicitly mounted directories
-6. **Response Collection**: Output is captured from stdout and returned as HTTP response
-7. **Caching**: Responses can be cached based on route configuration
-
-### Key Components
-
-- **Wazero Runtime**: Production-ready WebAssembly runtime for Go
-- **WASI Support**: Full WASI (WebAssembly System Interface) compatibility
-- **TinyGo Compilation**: Instruments are compiled using TinyGo for optimal WASM output
-- **JSON IPC**: Structured communication between host and WASM modules
-- **Filesystem Isolation**: Controlled directory mounting for secure file access
-- **LRU Caching**: Compiled modules are cached in memory for performance
-- **Response Caching**: HTTP responses can be cached with configurable TTLs
-
-### Security Model
-
-WASIO implements a comprehensive security model:
-
-- **Sandboxing**: Each WASM module runs in complete isolation
-- **Controlled File Access**: Only explicitly mounted directories are accessible
-- **No Network Access**: WASM modules cannot make outbound network connections
-- **Resource Limits**: Memory and execution time can be controlled
-- **Input Validation**: All data exchange happens through structured JSON
-
-### Performance Characteristics
-
-- **Fast Cold Starts**: WASM modules start in microseconds
-- **Near-Native Speed**: WebAssembly provides excellent performance
-- **Memory Efficiency**: Small memory footprint per module
-- **Compilation Caching**: Compiled modules are cached for subsequent requests
-- **Concurrent Execution**: Multiple modules can run simultaneously
-
-### Configuration
-
-All routing and behavior is controlled through `config.json`:
+Example `config.json`:
 
 ```json
 {
@@ -490,112 +205,214 @@ All routing and behavior is controlled through `config.json`:
   "cache_size": 1024,
   "index_page": true,
   "monitoring": true,
+  "default_timeout_ms": 30000,
+  "max_memory_pages": 0,
+  "logging": {
+    "format": "json",
+    "request_id": true
+  },
   "routes": {
-    "/endpoint": {
-      "wasm_file": "path/to/module.wasm",
+    "/hello_world": {
+      "wasm_file": "instruments/hello_world.wasm",
+      "cache": false,
+      "category": "Basic",
+      "description": "Simple greeting service",
+      "example": "?name=WASIO"
+    },
+    "/fibonacci": {
+      "wasm_file": "instruments/fibonacci.wasm",
       "cache": true,
       "ttl": 600,
-      "filesystem": {
-        "mount": "/virtual/path",
-        "path": "./host/directory"
-      }
+      "timeout_ms": 1000,
+      "category": "Math"
     }
   }
 }
 ```
 
-#### Configuration Options
+### Global Config Fields
 
-- **port**: HTTP server port (default: "8080")
-- **cache_ttl**: Global response cache TTL in seconds (default: 300)
-- **cache_size**: Maximum cache entries for both module and response caches (default: 1024)
-- **index_page**: Enable/disable the index page at `/` (default: true)
-- **monitoring**: Enable/disable the monitoring dashboard at `/monitoring` (default: true)
-- **routes**: Map of URL paths to instrument configurations
+- `port`: listen port
+- `cache_ttl`: default response cache TTL in seconds
+- `cache_size`: shared cache capacity
+- `index_page`: enable `/`
+- `monitoring`: enable `/monitoring`
+- `default_timeout_ms`: default WASM execution timeout in milliseconds
+- `max_memory_pages`: global WASM linear-memory cap in 64 KiB pages
+- `logging.format`: `json` or `combined`
+- `logging.request_id`: inject `X-Request-ID` when missing
 
-#### Route Configuration
+### Route Fields
 
-Each route supports the following options:
+- `wasm_file`: path to the module
+- `cache`: enable response caching
+- `ttl`: route-specific cache TTL
+- `filesystem.mount` / `filesystem.path`: explicit directory mount
+- `description`, `category`, `example`, `examples`, `use_case`: catalog metadata
+- `config`: module-specific config object
+- `methods`: allowed HTTP methods
+- `env`: environment variables injected into the guest
+- `timeout_ms`: per-route execution timeout override
 
-- **wasm_file**: Path to the compiled WebAssembly module
-- **cache**: Enable response caching for this route (default: false)
-- **ttl**: Cache TTL in seconds for this route (overrides global cache_ttl)
-- **filesystem**: Optional filesystem mount configuration
-  - **mount**: Virtual path inside the WASM environment
-  - **path**: Host directory to mount
+## Included Instruments
 
-### Building Custom Instruments
+WASIO includes a growing set of example instruments across several categories:
 
-Creating new instruments is straightforward:
+- Basic: `hello_world`, `random`, `hello_rust`
+- Math: `calculator`, `fibonacci`, `stats_utils`
+- Utils: `text_utils`, `time_utils`, `url_utils`, `json_utils`, `uuid`
+- Security: `hash_utils`
+- Network: `ip_utils`, `proxy`
+- Graphics: `mandelbrot`
+- File I/O: `process_file`
+- Web: `profile`, `wiki`, `chat`
+- AI: `llm`
 
-1. Write a Go program that reads JSON from stdin
-2. Process the data and write results to stdout
-3. Compile with TinyGo: `tinygo build -target=wasi -o instrument.wasm main.go`
-4. Add route configuration to `config.json`
-5. Restart WASIO to load the new instrument
+The most important meta-point is that they are no longer all Go-only examples. `/hello_rust` proves the platform can host multiple toolchains under the same runtime model.
 
-Example minimal instrument:
+## Product Roadmap: From Good Tool To Platform
 
-```go
-package main
+If the goal is “Docker + Cloudflare + wasmCloud + Spin + Caddy for WASM,” these are the remaining big pieces.
 
-import (
-    "encoding/json"
-    "fmt"
-    "os"
-)
+### 1. Packaging And Registry
 
-type Payload struct {
-    Params map[string]string `json:"params"`
-}
+This is the Docker/Spin part.
 
-func main() {
-    var payload Payload
-    json.NewDecoder(os.Stdin).Decode(&payload)
-    
-    // Process payload.Params as needed
-    fmt.Printf("Hello from custom instrument!")
-}
+Needed:
+
+- a `wasio.toml` or `instrument.toml` manifest format
+- signed downloadable instrument bundles
+- a public registry with install metadata, examples, and compatibility info
+- `wasio pull`, `wasio push`, `wasio search`
+- versioned dependencies and reproducible builds
+
+Without this, WASIO is still a runtime, not a distribution ecosystem.
+
+### 2. Better App Model
+
+This is the next step beyond a flat route map.
+
+Needed:
+
+- multi-route applications
+- named services/components
+- shared secrets/config references
+- route groups / prefixes / middleware chains
+- importable app bundles instead of manual JSON editing
+
+This is the bridge from single tools to real apps.
+
+### 3. Host Capabilities
+
+This is the wasmCloud/Cloudflare side.
+
+Needed:
+
+- first-class outbound HTTP capability
+- KV / object store / queue / pub-sub host bridges
+- cron / scheduled jobs
+- streaming request and response support
+- WebSocket / SSE support
+- capability permission model per route/app
+
+The native handler registry is the current foundation for this.
+
+### 4. Edge And Deployment Story
+
+This is the Cloudflare/Caddy operator story.
+
+Needed:
+
+- TLS and automatic certificate management
+- reverse-proxy and upstream routing features
+- config reload without process restart
+- static asset serving
+- edge caching rules and CDN integration
+- optional deploy targets for edge runtimes
+
+Right now WASIO is excellent for self-hosted local or internal deployments, but not yet an edge platform.
+
+### 5. Multi-Node Control Plane
+
+This is the Kubernetes/wasmCloud part.
+
+Needed:
+
+- multiple WASIO instances managed as a fleet
+- route placement and rollout logic
+- remote module distribution
+- service discovery
+- health checks and auto-recovery
+- leader election or external control plane
+
+This should come later. Doing this too early would overcomplicate the project.
+
+### 6. Security And Production Hardening
+
+Needed:
+
+- authn/authz for admin endpoints
+- signed module verification
+- secrets management instead of plain env in config
+- quotas / concurrency limits / rate limiting
+- audit logging
+- better failure isolation and clearer runtime error reporting
+
+### 7. Developer Experience
+
+This is where Caddy and Docker both win.
+
+Needed:
+
+- great docs and tutorials
+- copy-paste examples that work immediately
+- SDK examples for Go, Rust, TinyGo, Zig, AssemblyScript
+- better `wasio add` and validation workflows
+- one-command project scaffolding for new instruments
+- local test harness for request payloads
+
+## Recommended Next Priorities
+
+If the goal is traction, these are the best next moves in order:
+
+1. Add a manifest format and a simple remote registry.
+2. Introduce signed capability declarations for native host bridges.
+3. Implement TLS / reverse-proxy features and a cleaner deployment story.
+4. Add KV, queue, and outbound HTTP as first-class host capabilities.
+5. Ship multi-language starter templates and a `wasio init` scaffold command.
+
+Those five items do more for adoption than jumping directly to cluster orchestration.
+
+## Design Principles
+
+WASIO should stay opinionated about a few things:
+
+- explicit capabilities
+- one-binary deployment
+- readable config
+- fast local iteration
+- boring operations
+
+If WASIO keeps those properties while adding registry, capabilities, and deployment polish, it can become genuinely useful and memorable.
+
+## Development Commands
+
+```bash
+make build
+make instruments
+make all-with-rust
+make run
+make test
+make clean
+
+./wasio help
+./wasio list
+./wasio validate
+./wasio reload /hello_rust
 ```
 
-## Use Cases and Applications
+## License And Status
 
-WASIO's architecture makes it suitable for various applications:
+WASIO is currently best understood as a serious experimental platform: useful today, not yet a finished platform product.
 
-### 🔧 Microservices and APIs
-- **Isolated Functions**: Each endpoint runs in complete isolation
-- **Language Flexibility**: Write services in any WASM-compatible language
-- **Fast Deployment**: Add new endpoints without server restarts
-- **Resource Efficiency**: Minimal overhead per service
-
-### 🧮 Computational Services
-- **Mathematical Computations**: Like the Fibonacci and Mandelbrot examples
-- **Data Processing**: File analysis, transformation, and validation
-- **Image/Video Processing**: Graphics generation and manipulation
-- **Scientific Computing**: Numerical analysis and simulations
-
-### 🌐 Dynamic Web Applications
-- **Content Management**: Wiki systems, blogs, documentation sites
-- **User Interfaces**: Dynamic HTML generation with templates
-- **Real-time Applications**: Chat systems, live dashboards
-- **Form Processing**: Data collection and validation
-
-### 🏢 Enterprise Applications
-- **Secure Execution**: Run untrusted code safely
-- **Multi-tenancy**: Isolated execution environments per tenant
-- **Plugin Systems**: Extensible applications with user-provided code
-- **Edge Computing**: Lightweight services for edge deployment
-
-### 🎓 Educational and Research
-- **Algorithm Visualization**: Interactive demonstrations
-- **Programming Education**: Safe code execution environments
-- **Research Prototyping**: Rapid development and testing
-- **Benchmarking**: Performance comparison across implementations
-
-## Contributing
-
-Contributions are welcome! Please fork the repository, create a branch, and submit a pull request for any improvements or bug fixes.
-
-## License
-
-WASIO is open-source and available under the MIT License.
+That is fine. Docker did not win because it launched as the final form. It won because the workflow was obvious and the operator experience was better than the alternatives. WASIO should optimize for the same outcome.
